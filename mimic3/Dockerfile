@@ -23,7 +23,7 @@ RUN if [ "${ALPHA}" == "true" ]; then \
     else \
     pip3 install ovos-tts-server ovos-tts-plugin-mimic3[${LANG}]; \
     fi \
-    && mkdir -p ${HOME}/.cache/mycroft \
+    && mkdir -p ${HOME}/.cache/mycroft ${HOME}/.local/share/mycroft/mimic3 \
     && rm -rf ${HOME}/.cache/pip
 
 USER $USER
