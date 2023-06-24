@@ -22,7 +22,7 @@ RUN if [ "${ALPHA}" == "true" ]; then \
     else \
     pip3 install ovos-tts-server ovos-tts-plugin-piper; \
     fi \
-    && mkdir -p ${HOME}/.cache/mycroft \
+    && mkdir -p ${HOME}/.cache/mycroft ${HOME}/.local/share/piper_tts \
     && rm -rf ${HOME}/.cache/pip
 
 USER $USER
