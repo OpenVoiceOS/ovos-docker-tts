@@ -1,0 +1,66 @@
+---
+version: "3.9"
+
+x-podman:
+  &podman
+  userns_mode: keep-id
+  security_opt:
+    - "label=disable"
+
+x-logging:
+  &default-logging
+  driver: json-file
+  options:
+    mode: non-blocking
+    max-buffer-size: 4m
+
+volumes:
+  ovos_tts_piper_cache:
+    name: ovos_tts_piper_cache
+    driver: local
+  ovos_tts_piper_gradio_cache:
+    name: ovos_tts_piper_gradio_cache
+    driver: local
+  ovos_tts_mimic3_cache:
+    name: ovos_tts_mimic3_cache
+    driver: local
+  ovos_tts_mimic3_gradio_cache:
+    name: ovos_tts_mimic3_gradio_cache
+    driver: local
+
+services:
+  ovos_tts_piper:
+    <<: *podman
+    container_name: ovos_tts_piper
+    hostname: ovos_tts_piper
+    restart: unless-stopped
+    image: docker.io/smartgic/ovos-tts-server-piper:${VERSION}
+    logging: *default-logging
+    pull_policy: always
+    tty: true
+    environment:
+      TZ: $TZ
+    ports:
+      - "8089:9666"
+    volumes:
+      - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
+      - ovos_tts_piper_cache:/home/${OVOS_USER}/.local/share/piper_tts
+      - ovos_tts_piper_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
+
+  ovos_tts_mimic3:
+    <<: *podman
+    container_name: ovos_tts_mimic3
+    hostname: ovos_tts_mimic3
+    restart: unless-stopped
+    image: docker.io/smartgic/ovos-tts-server-mimic3:${VERSION}
+    logging: *default-logging
+    pull_policy: always
+    tty: true
+    environment:
+      TZ: $TZ
+    ports:
+      - "8090:9666"
+    volumes:
+      - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
+      - ovos_tts_mimic3_cache:/home/${OVOS_USER}/.local/share/mycroft/mimic3
+      - ovos_tts_mimic3_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
