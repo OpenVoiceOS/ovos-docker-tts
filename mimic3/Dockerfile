@@ -19,7 +19,7 @@ ARG LANG=all
 SHELL ["/bin/bash", "-c"]
 
 RUN if [ "${ALPHA}" == "true" ]; then \
-    pip3 install ovos-tts-server.git ovos-tts-plugin-mimic3[${LANG}] --pre; \
+    pip3 install ovos-tts-server ovos-tts-plugin-mimic3[${LANG}] --pre; \
     else \
     pip3 install ovos-tts-server ovos-tts-plugin-mimic3[${LANG}]; \
     fi \
