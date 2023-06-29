@@ -18,16 +18,13 @@ ARG USER=ovos
 SHELL ["/bin/bash", "-c"]
 
 RUN if [ "${ALPHA}" == "true" ]; then \
-    pip3 install ovos-tts-server git+https://github.com/goldyfruit/ovos-tts-plugin-piper.git --pre; \
+    pip3 install ovos-tts-server ovos-tts-plugin-piper --pre; \
     else \
     pip3 install ovos-tts-server ovos-tts-plugin-piper; \
     fi \
-    && mkdir -p ${HOME}/.cache/mycroft ${HOME}/.local/share/piper_tts \
-    && rm -rf ${HOME}/.cache/pip
+    && mkdir -p /home/${USER}/.cache/mycroft /home/${USER}/.local/share/piper_tts \
+    && rm -rf /home/${USER}/.cache/pip
 
 USER $USER
-
-ENV PATH /home/${USER}/.venv/bin:$PATH
-ENV VIRTUAL_ENV /home/${USER}/.venv
 
 ENTRYPOINT ovos-tts-server --engine ovos-tts-plugin-piper
