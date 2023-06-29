@@ -13,8 +13,8 @@ LABEL org.opencontainers.image.source="https://github.com/OpenVoiceOS/ovos-docke
 LABEL org.opencontainers.image.vendor="Open Voice OS"
 
 ARG ALPHA=false
-ARG USER=ovos
 ARG LANG=all
+ARG USER=ovos
 
 SHELL ["/bin/bash", "-c"]
 
@@ -23,12 +23,9 @@ RUN if [ "${ALPHA}" == "true" ]; then \
     else \
     pip3 install ovos-tts-server ovos-tts-plugin-mimic3[${LANG}]; \
     fi \
-    && mkdir -p ${HOME}/.cache/mycroft ${HOME}/.local/share/mycroft/mimic3 \
-    && rm -rf ${HOME}/.cache/pip
+    && mkdir -p /home/${USER}/.cache/mycroft /home/${USER}/.local/share/mycroft/mimic3 \
+    && rm -rf /home/${USER}/.cache/pip
 
 USER $USER
-
-ENV PATH /home/${USER}/.venv/bin:$PATH
-ENV VIRTUAL_ENV /home/${USER}/.venv
 
 ENTRYPOINT ovos-tts-server --engine ovos-tts-plugin-mimic3
