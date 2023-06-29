@@ -19,7 +19,7 @@ ENV DEBIAN_FRONTEND noninteractive
 SHELL ["/bin/bash", "-c"]
 
 RUN apt-get update \
-    && apt-get install -y vim git python3 python3-venv python3-pip curl ffmpeg libespeak-ng1 \
+    && apt-get install -y vim git gpg python3 python3-venv python3-pip curl ffmpeg libespeak-ng1 \
     && c_rehash \
     && useradd --no-log-init $USER -m -c "Open Voice OS user" \
     && python3 -m venv /home/${USER}/.venv \
