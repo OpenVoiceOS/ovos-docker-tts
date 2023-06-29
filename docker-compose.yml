@@ -27,6 +27,12 @@ volumes:
   ovos_tts_mimic3_gradio_cache:
     name: ovos_tts_mimic3_gradio_cache
     driver: local
+  ovos_tts_mimic_cache:
+    name: ovos_tts_mimic_cache
+    driver: local
+  ovos_tts_mimic_gradio_cache:
+    name: ovos_tts_mimic_gradio_cache
+    driver: local
 
 services:
   ovos_tts_piper:
@@ -64,3 +70,39 @@ services:
       - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
       - ovos_tts_mimic3_cache:/home/${OVOS_USER}/.local/share/mycroft/mimic3
       - ovos_tts_mimic3_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
+
+  ovos_tts_mimic:
+    <<: *podman
+    container_name: ovos_tts_mimic
+    hostname: ovos_tts_mimic
+    restart: unless-stopped
+    image: docker.io/smartgic/ovos-tts-server-mimic:${VERSION}
+    logging: *default-logging
+    pull_policy: always
+    tty: true
+    environment:
+      TZ: $TZ
+    ports:
+      - "8091:9666"
+    volumes:
+      - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
+      - ovos_tts_mimic_cache:/home/${OVOS_USER}/.cache/mycroft/MimicTTSPlugin
+      - ovos_tts_mimic_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
+
+  ovos_tts_google_tx:
+    <<: *podman
+    container_name: ovos_tts_google_tx
+    hostname: ovos_tts_google_tx
+    restart: unless-stopped
+    image: docker.io/smartgic/ovos-tts-server-google-tx:${VERSION}
+    logging: *default-logging
+    pull_policy: always
+    tty: true
+    environment:
+      TZ: $TZ
+    ports:
+      - "8092:9666"
+    volumes:
+      - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
+      - ovos_tts_google_tx_cache:/home/${OVOS_USER}/.cache/mycroft/GoogleTranslateTTS
+      - ovos_tts_google_tx_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
