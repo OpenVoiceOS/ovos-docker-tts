@@ -53,6 +53,37 @@ services:
       - ovos_tts_piper_cache:/home/${OVOS_USER}/.local/share/piper_tts
       - ovos_tts_piper_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
 
+  ########################
+  # Uncomment this service if you want to use Nvidia CUDA
+  # with Piper Text-to-Speech
+  ########################
+  # ovos_tts_piper:
+  #   <<: *podman
+  #   container_name: ovos_tts_piper
+  #   hostname: ovos_tts_piper
+  #   restart: unless-stopped
+  #   image: docker.io/smartgic/ovos-tts-server-piper-cuda:${VERSION}
+  #   logging: *default-logging
+  #   pull_policy: always
+  #   tty: true
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities:
+  #               - gpu
+  #   environment:
+  #     TZ: $TZ
+  #     CT2_CUDA_ALLOW_FP16: 1
+  #   ports:
+  #     - "8089:9666"
+  #   volumes:
+  #     - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
+  #     - ovos_tts_piper_cache:/home/${OVOS_USER}/.local/share/piper_tts
+  #     - ovos_tts_piper_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
+
   ovos_tts_mimic3:
     <<: *podman
     container_name: ovos_tts_mimic3
