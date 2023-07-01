@@ -39,6 +39,12 @@ volumes:
   ovos_tts_sam_gradio_cache:
     name: ovos_tts_sam_gradio_cache
     driver: local
+  ovos_tts_google_tx_cache:
+    name: ovos_tts_google_tx_cache
+    driver: local
+  ovos_tts_google_tx_gradio_cache:
+    name: ovos_tts_google_tx_gradio_cache
+    driver: local
 
 services:
   ovos_tts_piper:
