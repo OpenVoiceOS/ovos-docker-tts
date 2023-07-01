@@ -28,6 +28,7 @@ RUN apt-get update \
     && chown ${USER}:${USER} -R /home/${USER} \
     && pip3 install aiohttp \
     && apt-get --purge autoremove -y \
+    && apt-get clean \
     && rm -rf ${HOME}/.cache/* /var/lib/apt /var/log/{apt,dpkg.log}
 
 USER $USER

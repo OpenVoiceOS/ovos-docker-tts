@@ -32,6 +32,7 @@ RUN apt-get update \
     ln -s -f $(eval $LIBNVRCT | awk -F"/" '{ print $NF }') libnvrtc.so; \
     fi \
     && apt-get --purge autoremove -y \
+    && apt-get clean \
     && rm -rf ${HOME}/.cache/* /var/lib/apt /var/log/{apt,dpkg.log}
 
 USER $USER
