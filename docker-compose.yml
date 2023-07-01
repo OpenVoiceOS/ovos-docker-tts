@@ -162,7 +162,7 @@ services:
     environment:
       TZ: $TZ
     ports:
-      - "8092:9666"
+      - "8094:9666"
     volumes:
       - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
       - ovos_tts_sam_cache:/home/${OVOS_USER}/.cache/mycroft/SAMTTS
