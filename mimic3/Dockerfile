@@ -29,3 +29,5 @@ RUN if [ "${ALPHA}" == "true" ]; then \
 USER $USER
 
 ENTRYPOINT ovos-tts-server --engine ovos-tts-plugin-mimic3
+
+EXPOSE 9666

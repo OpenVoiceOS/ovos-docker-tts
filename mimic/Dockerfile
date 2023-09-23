@@ -39,3 +39,5 @@ RUN curl -sS https://forslund.github.io/mycroft-desktop-repo/mycroft-desktop.gpg
 USER $USER
 
 ENTRYPOINT ovos-tts-server --engine ovos-tts-plugin-mimic
+
+EXPOSE 9666

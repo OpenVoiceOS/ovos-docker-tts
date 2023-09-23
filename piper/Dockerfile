@@ -28,3 +28,5 @@ RUN if [ "${ALPHA}" == "true" ]; then \
 USER $USER
 
 ENTRYPOINT ovos-tts-server --engine ovos-tts-plugin-piper
+
+EXPOSE 9666

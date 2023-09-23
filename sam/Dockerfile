@@ -36,3 +36,5 @@ RUN if [ "${ALPHA}" == "true" ]; then \
 USER $USER
 
 ENTRYPOINT ovos-tts-server --engine ovos-tts-plugin-SAM
+
+EXPOSE 9666

@@ -31,3 +31,5 @@ RUN pip3 install aiohttp \
 USER $USER
 
 ENTRYPOINT ovos-tts-server --engine ovos-tts-plugin-piper
+
+EXPOSE 9666
