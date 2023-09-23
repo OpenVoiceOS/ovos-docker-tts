@@ -18,9 +18,9 @@ ARG USER=ovos
 SHELL ["/bin/bash", "-c"]
 
 RUN if [ "${ALPHA}" == "true" ]; then \
-    pip3 install ovos-tts-server ovos-tts-plugin-piper --pre; \
+    pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime!=1.16 ovos-classifiers --pre; \
     else \
-    pip3 install ovos-tts-server ovos-tts-plugin-piper; \
+    pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime!=1.16 ovos-classifiers; \
     fi \
     && mkdir -p /home/${USER}/.cache/mycroft /home/${USER}/.local/share/piper_tts \
     && rm -rf /home/${USER}/.cache/pip

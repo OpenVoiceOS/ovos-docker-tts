@@ -19,9 +19,9 @@ SHELL ["/bin/bash", "-c"]
 
 RUN pip3 install aiohttp \
     && if [ "${ALPHA}" == "true" ]; then \
-    pip3 install ovos-tts-server ovos-tts-plugin-piper --pre; \
+    pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime!=1.16 ovos-classifiers --pre; \
     else \
-    pip3 install ovos-tts-server ovos-tts-plugin-piper; \
+    pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime!=1.16 ovos-classifiers; \
     fi \
     && pip3 uninstall -y onnxruntime \
     && pip3 install onnxruntime-gpu \
