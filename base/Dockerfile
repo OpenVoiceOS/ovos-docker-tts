@@ -25,8 +25,8 @@ RUN apt-get update \
     && python3 -m venv /home/${USER}/.venv \
     && . /home/${USER}/.venv/bin/activate \
     && mkdir -p /home/${USER}/.config/mycroft /home/${USER}/.cache /home/${USER}/gradio_cached_examples \
-    && chown ${USER}:${USER} -R /home/${USER} \
     && pip3 install aiohttp \
+    && chown ${USER}:${USER} -R /home/${USER} \
     && apt-get --purge autoremove -y \
     && apt-get clean \
     && rm -rf ${HOME}/.cache/* /var/lib/apt /var/log/{apt,dpkg.log}
