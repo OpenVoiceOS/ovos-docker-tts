@@ -18,12 +18,15 @@ ARG USER=ovos
 SHELL ["/bin/bash", "-c"]
 
 RUN if [ "${ALPHA}" == "true" ]; then \
-    pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime!=1.16 ovos-classifiers --pre; \
+    pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime ovos-classifiers piper-phonemize --pre; \
     else \
-    pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime!=1.16 ovos-classifiers; \
+    pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime ovos-classifiers piper-phonemize; \
     fi \
+    && git clone https://github.com/rhasspy/piper.git /tmp/piper \
+    && cd /tmp/piper/src/python_run \
+    && python3 setup.py install \
     && mkdir -p /home/${USER}/.cache/mycroft /home/${USER}/.local/share/piper_tts \
-    && rm -rf /home/${USER}/.cache/pip
+    && rm -rf /home/${USER}/.cache/pip /tmp/piper
 
 USER $USER
 
