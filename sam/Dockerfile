@@ -26,9 +26,9 @@ RUN apt-get update \
 USER $USER
 
 RUN if [ "${ALPHA}" == "true" ]; then \
-    pip3 install ovos-tts-server git+https://github.com/OpenVoiceOS/ovos-tts-plugin-SAM.git --pre; \
+    pip3 install ovos-tts-server git+https://github.com/OpenVoiceOS/ovos-tts-plugin-SAM.git ovos-classifiers --pre; \
     else \
-    pip3 install ovos-tts-server ovos-tts-plugin-SAM; \
+    pip3 install ovos-tts-server ovos-tts-plugin-SAM ovos-classifiers; \
     fi \
     && mkdir -p /home/${USER}/.cache/mycroft/SAMTTS \
     && rm -rf /home/${USER}/.cache/pip

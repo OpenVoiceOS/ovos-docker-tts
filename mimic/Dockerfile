@@ -26,9 +26,9 @@ RUN curl -sS https://forslund.github.io/mycroft-desktop-repo/mycroft-desktop.gpg
     && apt-get update \
     && apt-get install -y mimic \
     && if [ "${ALPHA}" == "true" ]; then \
-    pip3 install ovos-tts-server ovos-tts-plugin-mimic --pre; \
+    pip3 install ovos-tts-server ovos-tts-plugin-mimic ovos-classifiers --pre; \
     else \
-    pip3 install ovos-tts-server ovos-tts-plugin-mimic; \
+    pip3 install ovos-tts-server ovos-tts-plugin-mimic ovos-classifiers; \
     fi \
     && mkdir -p /home/${USER}/.cache/mycroft/MimicTTSPlugin \
     && chown ${USER}:${USER} -R /home/${USER} \

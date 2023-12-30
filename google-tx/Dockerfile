@@ -18,9 +18,9 @@ ARG USER=ovos
 SHELL ["/bin/bash", "-c"]
 
 RUN if [ "${ALPHA}" == "true" ]; then \
-    pip3 install ovos-tts-server git+https://github.com/OpenVoiceOS/ovos-tts-plugin-google-tx.git --pre; \
+    pip3 install ovos-tts-server git+https://github.com/OpenVoiceOS/ovos-tts-plugin-google-tx.git ovos-classifiers --pre; \
     else \
-    pip3 install ovos-tts-server ovos-tts-plugin-google-tx; \
+    pip3 install ovos-tts-server ovos-tts-plugin-google-tx ovos-classifiers; \
     fi \
     && mkdir -p /home/${USER}/.cache/mycroft/GoogleTranslateTTS \
     && rm -rf /home/${USER}/.cache/pip

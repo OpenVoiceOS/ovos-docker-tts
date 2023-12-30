@@ -19,9 +19,9 @@ ARG USER=ovos
 SHELL ["/bin/bash", "-c"]
 
 RUN if [ "${ALPHA}" == "true" ]; then \
-    pip3 install ovos-tts-server ovos-tts-plugin-mimic3[${LANG}] onnxruntime!=1.16 ovos-classifiers --pre; \
+    pip3 install ovos-tts-server ovos-tts-plugin-mimic3[${LANG}] onnxruntime ovos-classifiers --pre; \
     else \
-    pip3 install ovos-tts-server ovos-tts-plugin-mimic3[${LANG}] onnxruntime!=1.16 ovos-classifiers; \
+    pip3 install ovos-tts-server ovos-tts-plugin-mimic3[${LANG}] onnxruntime ovos-classifiers; \
     fi \
     && mkdir -p /home/${USER}/.cache/mycroft /home/${USER}/.local/share/mycroft/mimic3 \
     && rm -rf /home/${USER}/.cache/pip
