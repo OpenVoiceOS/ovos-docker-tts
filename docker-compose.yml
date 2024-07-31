@@ -45,6 +45,12 @@ volumes:
   ovos_tts_google_tx_gradio_cache:
     name: ovos_tts_google_tx_gradio_cache
     driver: local
+  ovos_tts_matxa_cache:
+    name: ovos_tts_matxa_cache
+    driver: local
+  ovos_tts_matxa_gradio_cache:
+    name: ovos_tts_matxa_gradio_cache
+    driver: local
 
 services:
   ovos_tts_piper:
@@ -136,3 +142,22 @@ services:
       - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
       - ovos_tts_sam_cache:/home/${OVOS_USER}/.cache/mycroft/SAMTTS
       - ovos_tts_sam_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
+
+  ovos_tts_matxa:
+    <<: *podman
+    container_name: ovos_tts_matxa
+    hostname: ovos_tts_matxa
+    restart: unless-stopped
+    image: docker.io/smartgic/ovos-tts-server-matxa:${VERSION}
+    logging: *default-logging
+    pull_policy: always
+    tty: true
+    environment:
+      TZ: $TZ
+    ports:
+      - "8090:9666"
+    volumes:
+      - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
+      - ovos_tts_matxa_cache:/home/${OVOS_USER}/.local/share/OpenVoiceOS
+      - ovos_tts_matxa_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
+
