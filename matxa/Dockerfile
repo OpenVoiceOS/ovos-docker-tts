@@ -23,7 +23,7 @@ SHELL ["/bin/bash", "-c"]
 
 RUN apt-get update \
     && apt-get install -y automake libtool \
-    && git clone https://github.com/projecte-aina/espeak-ng /tmp/espeak-ng \
+    && git clone https://github.com/espeak-ng/espeak-ng.git /tmp/espeak-ng \
     && cd /tmp/espeak-ng \
     && ./autogen.sh \
     && ./configure \
