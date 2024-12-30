@@ -51,6 +51,12 @@ volumes:
   ovos_tts_matxa_gradio_cache:
     name: ovos_tts_matxa_gradio_cache
     driver: local
+  ovos_tts_nos_cache:
+    name: ovos_tts_nos_cache
+    driver: local
+  ovos_tts_nos_gradio_cache:
+    name: ovos_tts_nos_gradio_cache
+    driver: local
 
 services:
   ovos_tts_piper:
