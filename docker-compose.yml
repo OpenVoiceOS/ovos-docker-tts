@@ -57,6 +57,12 @@ volumes:
   ovos_tts_nos_gradio_cache:
     name: ovos_tts_nos_gradio_cache
     driver: local
+  ovos_tts_kokoro_cache:
+    name: ovos_tts_kokoro_cache
+    driver: local
+  ovos_tts_kokoro_gradio_cache:
+    name: ovos_tts_kokoro_gradio_cache
+    driver: local
 
 services:
   ovos_tts_piper:
@@ -185,6 +191,28 @@ services:
       - ovos_tts_nos_cache:/home/${OVOS_USER}/.local/share/nos_tts_models
       - ovos_tts_nos_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
 
+  ovos_tts_kokoro:
+    <<: *podman
+    container_name: ovos_tts_kokoro
+    hostname: ovos_tts_kokoro
+    restart: unless-stopped
+    image: docker.io/smartgic/ovos-tts-server-kokoro:${VERSION}
+    build:
+      context: .
+      dockerfile: kokoro/Dockerfile
+      args:
+        VERSION: ${VERSION}
+    logging: *default-logging
+    tty: true
+    environment:
+      TZ: $TZ
+    ports:
+      - "8097:9666"
+    volumes:
+      - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
+      - ovos_tts_kokoro_cache:/home/${OVOS_USER}/.cache
+      - ovos_tts_kokoro_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
+
   ovos_tts_coqui:
     <<: *podman
     container_name: ovos_tts_coqui
@@ -232,4 +260,3 @@ services:
       - ${CONFIG_FOLDER}:/home/${OVOS_USER}/.config/mycroft:ro,z
       # - ovos_tts_google_tx_cache:/home/${OVOS_USER}/.cache/mycroft/GoogleTranslateTTS
       # - ovos_tts_google_tx_gradio_cache:/home/${OVOS_USER}/gradio_cached_examples
-
