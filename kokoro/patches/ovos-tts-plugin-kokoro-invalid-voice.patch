@@ -1,0 +1,23 @@
+--- tts.py
++++ tts.py
+@@ -249,12 +249,20 @@
+         # sentinel (and empty/None) as "fall back to configured voice".
+         if not voice or voice == "default":
+             voice = self.config.get("voice", DEFAULT_VOICE)
++        voice_lang = self._voice_lang(voice)
++        if voice_lang is None:
++            fallback_voice = self.config.get("voice", DEFAULT_VOICE)
++            LOG.warning("Unknown Kokoro voice %r requested; falling back to %r",
++                        voice, fallback_voice)
++            voice = fallback_voice
++            voice_lang = self._voice_lang(voice)
++
+         speed = float(self.config.get("speed", 1.0))
+ 
+         # Voice id wins over OVOS lang — picking bm_george shouldn't render
+         # through the American pipeline just because self.lang is en-US.
+-        kokoro_lang = self._voice_lang(voice) or _resolve_lang(lang or self.lang, self.lang_map)
++        kokoro_lang = voice_lang or _resolve_lang(lang or self.lang, self.lang_map)
+         pipeline = _get_pipeline(kokoro_lang, device=self.device)
+ 
+         chunks = []

@@ -16,19 +16,20 @@ ARG USER=ovos
 ARG MISAKI_REF=main
 ARG KOKORO_REF=main
 ARG KOKORO_PLUGIN_REF=ovos-tts-plugin-kokoro-v0.2.0
-ARG MISAKI_EXTRAS=en
-ARG KOKORO_PLUGIN_EXTRAS=server
+ARG MISAKI_EXTRAS=en,ja,zh
+ARG KOKORO_PLUGIN_EXTRAS=server,ja,zh
 
 ENV DEBIAN_FRONTEND noninteractive
 ENV PATH=/home/${USER}/.venv/bin:$PATH
 ENV VIRTUAL_ENV=/home/${USER}/.venv
 ENV HF_HOME=/home/${USER}/.cache/huggingface
 ENV XDG_CACHE_HOME=/home/${USER}/.cache
+ENV TORCH_CPP_LOG_LEVEL=ERROR
 
 SHELL ["/bin/bash", "-c"]
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends vim git gpg curl ffmpeg espeak-ng libsndfile1 \
+    && apt-get install -y --no-install-recommends vim git gpg curl ffmpeg espeak-ng libsndfile1 patch build-essential cmake \
     && useradd --no-log-init $USER -m -c "Open Voice OS user" \
     && python3 -m venv /home/${USER}/.venv \
     && . /home/${USER}/.venv/bin/activate \
@@ -40,6 +41,8 @@ RUN apt-get update \
 
 USER $USER
 WORKDIR /home/${USER}
+
+COPY kokoro/patches/ovos-tts-plugin-kokoro-invalid-voice.patch /tmp/ovos-tts-plugin-kokoro-invalid-voice.patch
 
 RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
     && pip3 install --no-cache-dir \
@@ -53,6 +56,7 @@ RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/w
             "ovos-tts-plugin-kokoro[${KOKORO_PLUGIN_EXTRAS}] @ git+https://github.com/OscillateLabsLLC/ovos-tts-plugin-kokoro.git@${KOKORO_PLUGIN_REF}"; \
     fi \
     && python3 -m spacy download en_core_web_sm \
+    && patch -d "${VIRTUAL_ENV}/lib/python3.12/site-packages/ovos_tts_plugin_kokoro" -p0 < /tmp/ovos-tts-plugin-kokoro-invalid-voice.patch \
     && rm -rf /home/${USER}/.cache/pip
 
 ENTRYPOINT ovos-tts-server --engine ovos-tts-plugin-kokoro --cache
