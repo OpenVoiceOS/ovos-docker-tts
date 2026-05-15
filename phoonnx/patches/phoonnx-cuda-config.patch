@@ -1,0 +1,57 @@
+--- opm.py.orig
++++ opm.py
+@@ -10,6 +10,7 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ #
++import os
+ import wave
+ from typing import Dict
+ from ovos_utils.log import LOG
+@@ -33,6 +34,7 @@
+         	config (dict | None): Optional configuration passed to the base TTS initializer.
+         """
+         super().__init__(config=config)
++        self.use_cuda = self.config.get("use_cuda", bool(os.environ.get("CUDA", False)))
+         self.model_manager = TTSModelManager()
+         self.model_manager.load()
+         self.model_manager.merge_default_voices()
+@@ -100,7 +102,7 @@
+             if voice_id not in self.model_manager.voices:
+                 raise Exception(f"Unknown voice: {voice_id}")
+         LOG.debug(f"Using voice: {voice_id}")
+-        self.voices[voice_id] = self.model_manager.voices[voice_id].load()
++        self.voices[voice_id] = self.model_manager.voices[voice_id].load(use_cuda=self.use_cuda)
+         return self.voices[voice_id]
+ 
+     def get_tts(self, sentence, wav_file, lang=None, voice=None):
+--- model_manager.py.orig
++++ model_manager.py
+@@ -230,7 +230,7 @@
+                         if chunk:
+                             f.write(chunk)
+ 
+-    def load(self) -> TTSVoice:
++    def load(self, use_cuda: Optional[bool] = None) -> TTSVoice:
+         """
+         Load and return a TTSVoice for this model, ensuring the ONNX model is downloaded and the voice configuration is applied.
+         
+@@ -245,6 +245,8 @@
+         tokenizer_config_path = self.voice_path / "tokenizer_config.json"
+         tokens_path = self.voice_path / "tokens.txt"
+         self.download_model()
++        if use_cuda is None:
++            use_cuda = bool(os.environ.get("CUDA", False))
+ 
+         voice = TTSVoice.load(model_path=model_path,
+                               config_path=config_path,
+@@ -253,7 +255,8 @@
+                               lang_code=self.config.lang_code,
+                               phoneme_type_str=self.config.phoneme_type,
+                               alphabet_str=self.config.alphabet,
+-                              phonemes_txt=str(tokens_path) if self.tokens_url else None)
++                              phonemes_txt=str(tokens_path) if self.tokens_url else None,
++                              use_cuda=use_cuda)
+         # override phoneme_type, if config.json is wrong
+         if self.phoneme_type != voice.config.phoneme_type or self.alphabet != voice.config.alphabet:
+             voice.phoneme_type = self.phoneme_type
