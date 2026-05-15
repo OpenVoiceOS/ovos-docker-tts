@@ -15,9 +15,14 @@ LABEL org.opencontainers.image.vendor="Open Voice OS"
 ARG ALPHA=false
 ARG USER=ovos
 
+USER root
+
 SHELL ["/bin/bash", "-c"]
 
-RUN if [ "${ALPHA}" == "true" ]; then \
+RUN mkdir -p /var/lib/apt/lists/partial \
+    && apt-get update \
+    && apt-get install -y espeak-ng \
+    && if [ "${ALPHA}" == "true" ]; then \
     pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime ovos-classifiers piper-phonemize --pre; \
     else \
     pip3 install ovos-tts-server ovos-tts-plugin-piper onnxruntime ovos-classifiers piper-phonemize; \
@@ -26,7 +31,10 @@ RUN if [ "${ALPHA}" == "true" ]; then \
     && cd /tmp/piper/src/python_run \
     && python3 setup.py install \
     && mkdir -p /home/${USER}/.cache/mycroft /home/${USER}/.local/share/piper_tts \
-    && rm -rf /home/${USER}/.cache/pip /tmp/piper
+    && chown ${USER}:${USER} -R /home/${USER} \
+    && apt-get --purge autoremove -y \
+    && apt-get clean \
+    && rm -rf /home/${USER}/.cache/pip /tmp/piper /var/lib/apt /var/log/{apt,dpkg.log}
 
 USER $USER
 
