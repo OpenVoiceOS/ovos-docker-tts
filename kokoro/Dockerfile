@@ -59,6 +59,10 @@ RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/w
     && patch -d "${VIRTUAL_ENV}/lib/python3.12/site-packages/ovos_tts_plugin_kokoro" -p0 < /tmp/ovos-tts-plugin-kokoro-invalid-voice.patch \
     && rm -rf /home/${USER}/.cache/pip
 
+COPY kokoro/patches/ovos-tts-server-callable-metadata.patch /tmp/ovos-tts-server-callable-metadata.patch
+
+RUN patch -d "${VIRTUAL_ENV}/lib/python3.12/site-packages/ovos_tts_server" -p0 < /tmp/ovos-tts-server-callable-metadata.patch
+
 RUN pip3 install --no-cache-dir unidic-lite \
     && pip3 uninstall -y unidic
 

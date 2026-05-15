@@ -21,15 +21,18 @@ USER root
 
 SHELL ["/bin/bash", "-c"]
 
+COPY mimic/patches/ovos-tts-plugin-mimic-new-tts-template.patch /tmp/ovos-tts-plugin-mimic-new-tts-template.patch
+
 RUN curl -sS https://forslund.github.io/mycroft-desktop-repo/mycroft-desktop.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/mimic.gpg \
     && echo "deb http://forslund.github.io/mycroft-desktop-repo bionic main" | tee -a /etc/apt/sources.list.d/mimic.list \
     && apt-get update \
-    && apt-get install -y mimic \
+    && apt-get install -y mimic patch \
     && if [ "${ALPHA}" == "true" ]; then \
     pip3 install ovos-tts-server ovos-tts-plugin-mimic ovos-classifiers --pre; \
     else \
     pip3 install ovos-tts-server ovos-tts-plugin-mimic ovos-classifiers; \
     fi \
+    && patch -d "${VIRTUAL_ENV}/lib/python3.11/site-packages/ovos_tts_plugin_mimic" -p0 < /tmp/ovos-tts-plugin-mimic-new-tts-template.patch \
     && mkdir -p /home/${USER}/.cache/mycroft/MimicTTSPlugin \
     && chown ${USER}:${USER} -R /home/${USER} \
     && apt-get --purge autoremove -y \

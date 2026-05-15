@@ -1,0 +1,32 @@
+--- __init__.py.orig
++++ __init__.py
+@@ -26,7 +26,12 @@
+         Returns:
+             list[str]: Engine-reported available language codes, or a list containing the wrapper's default language if the engine does not expose available languages.
+         """
+-        return self.engine.available_languages or [self.lang]
++        langs = getattr(self.engine, "available_languages", None)
++        if callable(langs):
++            langs = langs()
++        if isinstance(langs, set):
++            langs = sorted(langs)
++        return langs or [self.lang]
+ 
+     @property
+     def voices(self):
+@@ -35,9 +40,12 @@
+         Attempt to retrieve available voices from the plugin.
+         Returns a list of dictionaries or strings depending on the plugin.
+         """
+-        if hasattr(self.engine, "available_voices"):
+-            return self.engine.available_voices
+-        return []
++        voices = getattr(self.engine, "available_voices", [])
++        if callable(voices):
++            voices = voices()
++        if isinstance(voices, set):
++            voices = sorted(voices)
++        return voices or []
+ 
+     def synthesize(self, utterance: str, **kwargs) -> Tuple[str, Optional[str]]:
+         """

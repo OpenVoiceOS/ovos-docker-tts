@@ -1,0 +1,19 @@
+--- __init__.py.orig
++++ __init__.py
+@@ -79,8 +79,14 @@
+     """Interface to Mimic TTS."""
+ 
+     def __init__(self, lang="en-us", config=None):
+-        super(MimicTTSPlugin, self).__init__(lang, config,
+-                                             MimicTTSValidator(self), 'wav')
++        if isinstance(lang, dict) and config is None:
++            config = lang
++            lang = config.get("lang", "en-us")
++        config = config or {}
++        config.setdefault("lang", lang)
++        super(MimicTTSPlugin, self).__init__(config=config,
++                                             validator=MimicTTSValidator(self),
++                                             audio_ext='wav')
+         self.mimic_bin = self.config.get("binary") or \
+                          self.find_premium_mimic() or \
+                          find_executable("mimic")

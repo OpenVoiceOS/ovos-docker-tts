@@ -22,13 +22,14 @@ USER root
 SHELL ["/bin/bash", "-c"]
 
 RUN apt-get update \
-    && apt-get install -y automake libtool \
+    && apt-get install -y build-essential cmake pkg-config libpcre2-dev \
     && git clone https://github.com/espeak-ng/espeak-ng.git /tmp/espeak-ng \
     && cd /tmp/espeak-ng \
-    && ./autogen.sh \
-    && ./configure \
-    && make \
-    && make install \
+    && cmake -B build -DCMAKE_INSTALL_PREFIX=/usr -DUSE_LIBPCAUDIO=OFF \
+    && cmake --build build --parallel "$(nproc)" \
+    && cmake --build build --target data --parallel "$(nproc)" \
+    && cmake --install build \
+    && ldconfig \
     && if [ "${ALPHA}" == "true" ]; then \
     pip3 install ovos-tts-server git+https://github.com/OpenVoiceOS/ovos-tts-plugin-matxa-multispeaker-cat.git ovos-classifiers --pre; \
     else \
@@ -45,4 +46,3 @@ USER $USER
 ENTRYPOINT ovos-tts-server --engine ovos-tts-plugin-matxa-multispeaker-cat
 
 EXPOSE 9666
-
