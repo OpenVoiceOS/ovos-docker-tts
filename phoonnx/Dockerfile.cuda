@@ -23,7 +23,6 @@ ENV PATH=/home/${USER}/.venv/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/
 ENV VIRTUAL_ENV=/home/${USER}/.venv
 ENV HF_HOME=/home/${USER}/.cache/huggingface
 ENV XDG_CACHE_HOME=/home/${USER}/.cache
-ENV PHOONNX_ORT_CACHE_DIR=/home/${USER}/.cache/phoonnx/ort
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 SHELL ["/bin/bash", "-c"]
@@ -45,7 +44,7 @@ RUN apt-get update \
     && python3 -m venv /home/${USER}/.venv \
     && mkdir -p \
         /home/${USER}/.cache/huggingface \
-        /home/${USER}/.cache/phoonnx/ort \
+        /home/${USER}/.cache/phoonnx \
         /home/${USER}/.config/mycroft \
         /home/${USER}/gradio_cached_examples \
     && chown -R ${USER}:${USER} /home/${USER} \
