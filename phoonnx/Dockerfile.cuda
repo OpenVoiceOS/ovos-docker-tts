@@ -14,9 +14,11 @@ LABEL org.opencontainers.image.vendor="Open Voice OS"
 ARG ALPHA=false
 ARG USER=ovos
 ARG PHOONNX_REPOSITORY=https://github.com/TigreGotico/phoonnx.git
-ARG PHOONNX_REF=1.64.1a1
+ARG PHOONNX_REF=a05d94eb014f5f62d5375b582db18f21fcc5fc4c
 ARG PHOONNX_ALPHA_REF=dev
 ARG ONNXRUNTIME_GPU_REF=1.26.0
+ARG OVOS_TTS_SERVER_REF=1.13.4
+ARG OVOS_CLASSIFIERS_REF=0.0.0a59
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH=/home/${USER}/.venv/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -54,7 +56,9 @@ RUN apt-get update \
 USER ${USER}
 
 RUN python -m pip install --no-cache-dir --upgrade pip wheel \
-    && python -m pip install --no-cache-dir ovos-tts-server ovos-classifiers \
+    && python -m pip install --no-cache-dir \
+        "ovos-tts-server==${OVOS_TTS_SERVER_REF}" \
+        "ovos-classifiers==${OVOS_CLASSIFIERS_REF}" \
     && if [ "${ALPHA}" = "true" ]; then \
         phoonnx_ref="${PHOONNX_ALPHA_REF}"; \
     else \
