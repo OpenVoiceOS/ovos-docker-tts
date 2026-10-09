@@ -1,5 +1,4 @@
-ARG TAG=alpha
-FROM smartgic/ovos-tts-server-base-cuda:${TAG}
+FROM nvidia/cuda:12.9.2-cudnn-runtime-ubuntu24.04
 
 ARG BUILD_DATE=unknown
 ARG VERSION=unknown
@@ -14,45 +13,67 @@ LABEL org.opencontainers.image.vendor="Open Voice OS"
 
 ARG ALPHA=false
 ARG USER=ovos
-ARG PHOONNX_REF=1.3.3
+ARG PHOONNX_REPOSITORY=https://github.com/TigreGotico/phoonnx.git
+ARG PHOONNX_REF=a05d94eb014f5f62d5375b582db18f21fcc5fc4c
+ARG PHOONNX_ALPHA_REF=dev
+ARG ONNXRUNTIME_GPU_REF=1.26.0
+ARG OVOS_TTS_SERVER_REF=1.13.4
+ARG OVOS_CLASSIFIERS_REF=0.0.0a59
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH=/home/${USER}/.venv/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV VIRTUAL_ENV=/home/${USER}/.venv
 ENV HF_HOME=/home/${USER}/.cache/huggingface
 ENV XDG_CACHE_HOME=/home/${USER}/.cache
-ENV CUDA=1
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 SHELL ["/bin/bash", "-c"]
 
-USER root
-
-COPY phoonnx/patches/phoonnx-cuda-config.patch /tmp/phoonnx-cuda-config.patch
-
-RUN mkdir -p /var/lib/apt/lists/partial \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends espeak-ng libsndfile1 patch \
-    && mkdir -p /home/${USER}/.cache/huggingface /home/${USER}/.cache/phoonnx /home/${USER}/gradio_cached_examples \
-    && chown ${USER}:${USER} -R /home/${USER} \
-    && apt-get --purge autoremove -y \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        espeak-ng \
+        git \
+        libsndfile1 \
+        python3 \
+        python3-pip \
+        python3-venv \
+    && if getent passwd 1000 >/dev/null; then userdel -r "$(getent passwd 1000 | cut -d: -f1)"; fi \
+    && if getent group 1000 >/dev/null; then groupdel "$(getent group 1000 | cut -d: -f1)"; fi \
+    && groupadd --gid 1000 ${USER} \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash ${USER} \
+    && python3 -m venv /home/${USER}/.venv \
+    && mkdir -p \
+        /home/${USER}/.cache/huggingface \
+        /home/${USER}/.cache/phoonnx \
+        /home/${USER}/.config/mycroft \
+        /home/${USER}/gradio_cached_examples \
+    && chown -R ${USER}:${USER} /home/${USER} \
     && apt-get clean \
-    && rm -rf /var/lib/apt /var/log/{apt,dpkg.log}
+    && rm -rf /var/lib/apt/lists/*
 
-USER $USER
+USER ${USER}
 
-RUN pip3 install --no-cache-dir --upgrade pip wheel \
-    && if [ "${ALPHA}" == "true" ]; then \
-        pip3 install --no-cache-dir --pre "gradio-client<1.0" "setuptools<81" ovos-tts-server ovos-classifiers \
-            "phoonnx @ git+https://github.com/TigreGotico/phoonnx.git@dev"; \
+RUN python -m pip install --no-cache-dir --upgrade pip wheel \
+    && python -m pip install --no-cache-dir \
+        "ovos-tts-server==${OVOS_TTS_SERVER_REF}" \
+        "ovos-classifiers==${OVOS_CLASSIFIERS_REF}" \
+    && if [ "${ALPHA}" = "true" ]; then \
+        phoonnx_ref="${PHOONNX_ALPHA_REF}"; \
     else \
-        pip3 install --no-cache-dir "gradio-client<1.0" "setuptools<81" ovos-tts-server ovos-classifiers \
-            "phoonnx @ git+https://github.com/TigreGotico/phoonnx.git@${PHOONNX_REF}"; \
+        phoonnx_ref="${PHOONNX_REF}"; \
     fi \
-    && pip3 uninstall -y onnxruntime \
-    && pip3 install --no-cache-dir coloredlogs flatbuffers numpy packaging protobuf sympy \
-    && pip3 install --no-cache-dir onnxruntime-gpu \
-        --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-11/pypi/simple/ \
-    && patch -d "${VIRTUAL_ENV}/lib/python3.10/site-packages/phoonnx" -p0 < /tmp/phoonnx-cuda-config.patch \
-    && mkdir -p /home/${USER}/.cache/phoonnx /home/${USER}/gradio_cached_examples \
+    && python -m pip install --no-cache-dir \
+        "phoonnx @ git+${PHOONNX_REPOSITORY}@${phoonnx_ref}" \
+    && python -m pip uninstall -y onnxruntime \
+    && python -m pip install --no-cache-dir --no-deps \
+        "onnxruntime-gpu==${ONNXRUNTIME_GPU_REF}" \
+    && python -c \
+        "import onnxruntime as ort; assert 'CUDAExecutionProvider' in ort.get_available_providers(), ort.get_available_providers()" \
     && rm -rf /home/${USER}/.cache/pip
+
+WORKDIR /home/${USER}
 
 ENTRYPOINT ["/home/ovos/.venv/bin/ovos-tts-server", "--engine", "ovos-tts-plugin-phoonnx", "--cache"]
 
