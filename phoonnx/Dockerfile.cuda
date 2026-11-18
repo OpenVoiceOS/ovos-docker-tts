@@ -26,6 +26,7 @@ SHELL ["/bin/bash", "-c"]
 USER root
 
 COPY phoonnx/patches/phoonnx-cuda-config.patch /tmp/phoonnx-cuda-config.patch
+COPY --chown=ovos:ovos phoonnx/stream /tmp/stream
 
 RUN mkdir -p /var/lib/apt/lists/partial \
     && apt-get update \
@@ -51,9 +52,11 @@ RUN pip3 install --no-cache-dir --upgrade pip wheel \
     && pip3 install --no-cache-dir onnxruntime-gpu \
         --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-11/pypi/simple/ \
     && patch -d "${VIRTUAL_ENV}/lib/python3.10/site-packages/phoonnx" -p0 < /tmp/phoonnx-cuda-config.patch \
+    && pip3 install --no-cache-dir /tmp/stream \
     && mkdir -p /home/${USER}/.cache/phoonnx /home/${USER}/gradio_cached_examples \
     && rm -rf /home/${USER}/.cache/pip
 
-ENTRYPOINT ["/home/ovos/.venv/bin/ovos-tts-server", "--engine", "ovos-tts-plugin-phoonnx", "--cache"]
+# ovos-tts-server plus GET /v2/synthesize/stream (phoonnx/stream)
+ENTRYPOINT ["/home/ovos/.venv/bin/ovos-tts-server-stream", "--engine", "ovos-tts-plugin-phoonnx", "--cache"]
 
 EXPOSE 9666

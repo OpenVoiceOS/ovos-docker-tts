@@ -38,6 +38,8 @@ RUN apt-get update \
 
 USER $USER
 
+COPY --chown=ovos:ovos phoonnx/stream /tmp/stream
+
 RUN if [ "${ALPHA}" == "true" ]; then \
         pip3 install --no-cache-dir --pre "gradio-client<1.0" "setuptools<81" ovos-tts-server ovos-classifiers \
             "phoonnx @ git+https://github.com/TigreGotico/phoonnx.git@dev"; \
@@ -45,9 +47,11 @@ RUN if [ "${ALPHA}" == "true" ]; then \
         pip3 install --no-cache-dir "gradio-client<1.0" "setuptools<81" ovos-tts-server ovos-classifiers \
             "phoonnx @ git+https://github.com/TigreGotico/phoonnx.git@${PHOONNX_REF}"; \
     fi \
+    && pip3 install --no-cache-dir /tmp/stream \
     && mkdir -p /home/${USER}/.cache/phoonnx /home/${USER}/gradio_cached_examples \
     && rm -rf /home/${USER}/.cache/pip
 
-ENTRYPOINT ["/home/ovos/.venv/bin/ovos-tts-server", "--engine", "ovos-tts-plugin-phoonnx", "--cache"]
+# ovos-tts-server plus GET /v2/synthesize/stream (phoonnx/stream)
+ENTRYPOINT ["/home/ovos/.venv/bin/ovos-tts-server-stream", "--engine", "ovos-tts-plugin-phoonnx", "--cache"]
 
 EXPOSE 9666
