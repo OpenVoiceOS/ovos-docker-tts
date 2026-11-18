@@ -39,7 +39,17 @@ def _synth_config(plugin: Any, voice_info: Any) -> Any:
     """The SynthesisConfig `PhoonnxTTSPlugin.get_tts` builds, from the plugin's own settings."""
     from phoonnx.voice import SynthesisConfig
 
-    cfg = plugin._cfg_opt
+    cfg = getattr(plugin, "_cfg_opt", None)
+    if cfg is None:
+        # phoonnx 1.3.x: the plugin reads its settings straight from self.config.
+        conf = plugin.config
+        return SynthesisConfig(
+            enable_phonetic_spellings=conf.get("enable_phonetic_spelling", True),
+            add_diacritics=conf.get("add_diacritics", voice_info.config.add_diacritics),
+            noise_scale=conf.get("noise-scale", voice_info.config.noise_scale),
+            length_scale=conf.get("length-scale", voice_info.config.length_scale),
+            noise_w_scale=conf.get("noise-w", voice_info.config.noise_w_scale),
+        )
     return SynthesisConfig(
         speaker_id=plugin._resolve_speaker(voice_info),
         enable_phonetic_spellings=cfg(

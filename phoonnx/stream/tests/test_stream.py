@@ -125,3 +125,14 @@ def test_engines_that_cannot_stream_answer_in_one_piece(tmp_path):
     r = TestClient(app).get("/v2/synthesize/stream", params={"utterance": "hi"})
     assert r.status_code == 200 and len(r.content) - 44 == 80000
     assert struct.unpack("<IHHI", r.content[16:28])[3] == 16000
+
+
+def test_phoonnx_1_3_plugin_without_cfg_opt_still_streams():
+    class Legacy(Plugin):
+        _cfg_opt = None
+
+    plugin = Legacy()
+    plugin.config = {"noise-scale": 0.3}
+    cfg = s._synth_config(plugin, plugin.get_default_voice("x"))
+    assert cfg["noise_scale"] == 0.3 and cfg["length_scale"] == 1.0
+    assert "speaker_id" not in cfg
