@@ -1,4 +1,10 @@
-FROM nvidia/cuda:12.9.2-cudnn-runtime-ubuntu24.04
+# CUDA 12.9 is the last line that runs on Maxwell, Pascal and Volta cards (a Tesla P40, for one).
+# For newer cards the image also builds with
+#   --build-arg CUDA_VERSION=13.0.3 --build-arg ONNXRUNTIME_GPU_REF=1.32.0
+# ONNX Runtime 1.27 and later are built for CUDA 13. The host's NVIDIA driver must support the
+# CUDA version of the image, or the container does not start.
+ARG CUDA_VERSION=12.9.2
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu24.04
 
 ARG BUILD_DATE=unknown
 ARG VERSION=unknown
@@ -11,14 +17,10 @@ LABEL org.opencontainers.image.documentation="https://openvoiceos.github.io/comm
 LABEL org.opencontainers.image.source="https://github.com/OpenVoiceOS/ovos-docker-tts"
 LABEL org.opencontainers.image.vendor="Open Voice OS"
 
-ARG ALPHA=false
 ARG USER=ovos
 ARG PHOONNX_REPOSITORY=https://github.com/TigreGotico/phoonnx.git
-ARG PHOONNX_REF=a05d94eb014f5f62d5375b582db18f21fcc5fc4c
-ARG PHOONNX_ALPHA_REF=dev
+ARG PHOONNX_REF=dev
 ARG ONNXRUNTIME_GPU_REF=1.26.0
-ARG OVOS_TTS_SERVER_REF=1.13.4
-ARG OVOS_CLASSIFIERS_REF=0.0.0a59
 ARG ESPEAK_NG_REF=1.52.0
 ARG ESPEAK_NG_COMMIT=4870adfa25b1a32b4361592f1be8a40337c58d6c
 
@@ -88,12 +90,17 @@ RUN apt-get update \
 
 USER ${USER}
 
+# Alpha releases only: --pre for ovos-tts-server and what it depends on, and phoonnx from its dev
+# branch. ovos-classifiers is not installed any more; nothing here imports it, and it held NumPy
+# at 1.26.
+# tokenizers<1: --pre takes the 1.0 release candidates, which have no Tokenizer.encode; the
+# Hebrew vowel marks call it, and the voice reads the bare letters when it fails.
 # scriptconv[...] installs the phonemizers that phoonnx leaves out. A voice that needs one of
 # them fails without it, or reads Arabic and Hebrew without their vowels:
-#   espeak    the eSpeak wrapper, which the espeak extra of phoonnx 1.64 no longer installs
+#   espeak    the eSpeak wrapper
 #   he        the Hebrew voices
 #   misaki    the English, Japanese and Chinese voices of Kokoro
-#   pt        the Portuguese voices of Kokoro, on phoonnx 1.64
+#   pt        the sense marks of European Portuguese
 #   tashkeel  the vowel marks of Arabic text
 # The floor is the one the dev branch of phoonnx asks for. It names a pre-release, and pip takes
 # scriptconv's alpha line for this requirement only when the requirement itself names one.
@@ -104,18 +111,12 @@ USER ${USER}
 # is installed here because misaki would otherwise fetch it with pip on the first request. The
 # G2P call fails the build if English does not load without the removed packages.
 RUN python -m pip install --no-cache-dir --upgrade pip wheel \
-    && python -m pip install --no-cache-dir \
-        "ovos-tts-server==${OVOS_TTS_SERVER_REF}" \
-        "ovos-classifiers==${OVOS_CLASSIFIERS_REF}" \
-    && if [ "${ALPHA}" = "true" ]; then \
-        phoonnx_ref="${PHOONNX_ALPHA_REF}"; \
-    else \
-        phoonnx_ref="${PHOONNX_REF}"; \
-    fi \
     && python -m pip install --no-cache-dir --no-deps \
         --index-url https://download.pytorch.org/whl/cpu torch \
-    && python -m pip install --no-cache-dir \
-        "phoonnx[espeak] @ git+${PHOONNX_REPOSITORY}@${phoonnx_ref}" \
+    && python -m pip install --no-cache-dir --pre \
+        "gradio-client<1.0" "setuptools<81" "tokenizers<1" \
+        ovos-tts-server \
+        "phoonnx[espeak] @ git+${PHOONNX_REPOSITORY}@${PHOONNX_REF}" \
         "scriptconv[espeak,he,misaki,pt,tashkeel]>=0.0.4a123" \
     && python -m pip uninstall -y \
         spacy-curated-transformers curated-transformers curated-tokenizers \
