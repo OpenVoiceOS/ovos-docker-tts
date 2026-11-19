@@ -19,6 +19,8 @@ ARG PHOONNX_ALPHA_REF=dev
 ARG ONNXRUNTIME_GPU_REF=1.26.0
 ARG OVOS_TTS_SERVER_REF=1.13.4
 ARG OVOS_CLASSIFIERS_REF=0.0.0a59
+ARG ESPEAK_NG_REF=1.52.0
+ARG ESPEAK_NG_COMMIT=4870adfa25b1a32b4361592f1be8a40337c58d6c
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH=/home/${USER}/.venv/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -33,7 +35,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        espeak-ng \
         git \
         libsndfile1 \
         python3 \
@@ -52,6 +53,38 @@ RUN apt-get update \
     && chown -R ${USER}:${USER} /home/${USER} \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# eSpeak NG is built from source. Ubuntu 24.04 packages 1.51, which reads Mandarin as English
+# letter names, and the Chinese Piper voices then speak nonsense. The commit is checked because a
+# tag can be moved. The audio back ends are left out: the server asks eSpeak for phonemes only.
+# The build tools leave in the same layer. The last lines fail the build if Mandarin falls back
+# to English again.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
+        build-essential \
+        libtool \
+        pkg-config \
+    && git clone --depth 1 --branch "${ESPEAK_NG_REF}" https://github.com/espeak-ng/espeak-ng.git /tmp/espeak-ng \
+    && cd /tmp/espeak-ng \
+    && test "$(git rev-parse HEAD)" = "${ESPEAK_NG_COMMIT}" \
+    && ./autogen.sh \
+    && ./configure --prefix=/usr/local \
+        --with-extdict-cmn --with-extdict-ru --with-extdict-yue \
+        --without-async --without-mbrola --without-pcaudio --without-sonic --without-speechplayer \
+    && make \
+    && make install \
+    && rm -f /usr/local/lib/libespeak-ng.a /usr/local/lib/libespeak-ng.la \
+    && ldconfig \
+    && cd / \
+    && rm -rf /tmp/espeak-ng \
+    && apt-get purge -y --auto-remove autoconf automake build-essential libtool pkg-config \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && mandarin="$(echo '這是語音助理' | espeak-ng -q -x --ipa -v cmn)" \
+    && test -n "${mandarin}" \
+    && ! grep -q '(en)' <<< "${mandarin}"
 
 USER ${USER}
 
