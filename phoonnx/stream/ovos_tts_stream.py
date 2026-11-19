@@ -1,20 +1,29 @@
 """Streaming synthesis for ovos-tts-server.
 
 `GET /v2/synthesize/stream?utterance=...&lang=...&voice=...` answers a WAV whose body is sent as
-it is made. phoonnx already synthesises one sentence at a time (`TTSVoice.synthesize` is a
-generator); the stock server collects every sentence into one file before answering, so a
-four-sentence reply is silent for four sentences. Here each sentence is sent when it is done, so
-first audio costs one sentence, however long the text.
+it is made. phoonnx synthesises one sentence at a time; the stock server waits for every sentence
+before it answers, so a four-sentence reply is silent for four sentences. Here each sentence is
+sent when it is done, so first audio costs one sentence, however long the text.
+
+How: the request runs the server's own synthesis, the one `/v2/synthesize` runs, in a worker
+thread, and the audio is copied to the client as the engine writes it to its WAV file. Nothing of
+the engine is done again here, so the voice, the parameters, SSML, the voice cache and the
+sentence cache are those of `/v2/synthesize`, whatever the version of the plugin.
 
 The WAV header says the length is unknown (both size fields 0xFFFFFFFF), as streaming WAV does;
-readers that need a length read to the end. Engines that cannot stream (piper, kokoro, ...)
-still answer this route, as one piece: the same bytes a client would have got from /v2/synthesize.
+readers that need a length read to the end. An utterance answered from the sentence cache, and
+an engine not known to write its file piece by piece, are sent in one piece: the same audio
+`/v2/synthesize` gives.
 
 `ovos-tts-server-stream` is `ovos-tts-server` with this route added; same arguments.
 """
 from __future__ import annotations
 
+import logging
+import queue
 import struct
+import sys
+import threading
 import wave
 from collections.abc import Iterator
 from typing import Any
@@ -22,7 +31,39 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 
+LOG = logging.getLogger("ovos_tts_stream")
+
 UNKNOWN = 0xFFFFFFFF
+
+# Plugins, by top-level module, known to write the finished audio to the WAV file as they make
+# it. Any other plugin is answered in one piece from the file it returns: it may write a file
+# and then rework it, and what was copied on the way would not be what it answers.
+PROGRESSIVE = frozenset({"phoonnx"})
+
+Piece = tuple[int, int, int, bytes]  # sample rate, channels, bytes a sample, PCM
+
+_request = threading.local()
+_writeframesraw = wave.Wave_write.writeframesraw
+
+
+def _tee(self: wave.Wave_write, data: Any) -> None:
+    """`Wave_write.writeframesraw`, which first hands the frames to the request being served by
+    this thread, when there is one."""
+    sink = getattr(_request, "sink", None)
+    if sink is not None:
+        try:
+            sink(self, data)
+        except Exception:  # the file still has to be written: /v2/synthesize depends on it
+            _request.sink = None
+            LOG.exception("stream: the audio could not be copied; this answer will stop short")
+    _writeframesraw(self, data)
+
+
+def install_tee() -> None:
+    """Let a request see the frames its engine writes. Once a process; other threads, and
+    requests that did not ask, write as before."""
+    if wave.Wave_write.writeframesraw is not _tee:
+        wave.Wave_write.writeframesraw = _tee  # type: ignore[method-assign]
 
 
 def wav_header(rate: int, channels: int = 1, width: int = 2) -> bytes:
@@ -35,73 +76,92 @@ def wav_header(rate: int, channels: int = 1, width: int = 2) -> bytes:
     )
 
 
-def _synth_config(plugin: Any, voice_info: Any) -> Any:
-    """The SynthesisConfig `PhoonnxTTSPlugin.get_tts` builds, from the plugin's own settings."""
-    from phoonnx.voice import SynthesisConfig
-
-    cfg = getattr(plugin, "_cfg_opt", None)
-    if cfg is None:
-        # phoonnx 1.3.x: the plugin reads its settings straight from self.config.
-        conf = plugin.config
-        return SynthesisConfig(
-            enable_phonetic_spellings=conf.get("enable_phonetic_spelling", True),
-            add_diacritics=conf.get("add_diacritics", voice_info.config.add_diacritics),
-            noise_scale=conf.get("noise-scale", voice_info.config.noise_scale),
-            length_scale=conf.get("length-scale", voice_info.config.length_scale),
-            noise_w_scale=conf.get("noise-w", voice_info.config.noise_w_scale),
-        )
-    return SynthesisConfig(
-        speaker_id=plugin._resolve_speaker(voice_info),
-        enable_phonetic_spellings=cfg(
-            voice_info.config.enable_phonetic_spellings
-            if hasattr(voice_info.config, "enable_phonetic_spellings") else True,
-            "enable_phonetic_spellings", "enable_phonetic_spelling"),
-        add_diacritics=cfg(voice_info.config.add_diacritics, "add_diacritics"),
-        noise_scale=cfg(voice_info.config.noise_scale, "noise_scale", "noise-scale"),
-        length_scale=cfg(voice_info.config.length_scale, "length_scale", "length-scale"),
-        noise_w_scale=cfg(voice_info.config.noise_w_scale, "noise_w_scale", "noise_w", "noise-w"),
-        speaker_reference=cfg(None, "speaker_reference", "ref_wav", "clone_voice"),
-        speaker_reference_text=cfg(None, "speaker_reference_text", "ref_text"),
-        speaker_reference_lang=cfg(None, "speaker_reference_lang", "ref_lang"),
-        super_resolution=bool(cfg(False, "super_resolution")),
-        super_resolution_model=cfg(None, "super_resolution_model"),
-    )
-
-
-def _phoonnx(plugin: Any, text: str, lang: str | None, voice: str | None
-             ) -> Iterator[tuple[int, int, bytes]]:
-    if voice and voice != "default":
-        model = plugin.get_model(voice)
-        voice_info = plugin.model_manager.voices[voice]
-    else:
-        voice_info = plugin.get_default_voice(lang or plugin.lang)
-        model = plugin.get_model(voice_info.voice_id)
-    for chunk in model.synthesize(text, _synth_config(plugin, voice_info)):
-        yield chunk.sample_rate, chunk.sample_channels, chunk.audio_int16_bytes
-
-
-def _whole(engine: Any, text: str, params: dict[str, Any]) -> Iterator[tuple[int, int, bytes]]:
-    path, _ = engine.synthesize(text, **params)
-    with wave.open(path, "rb") as clip:
-        rate, channels = clip.getframerate(), clip.getnchannels()
+def _file(path: Any) -> Iterator[Piece]:
+    with wave.open(str(path), "rb") as clip:
+        rate, channels, width = clip.getframerate(), clip.getnchannels(), clip.getsampwidth()
         while data := clip.readframes(rate):  # a second at a time
-            yield rate, channels, data
+            yield rate, channels, width, data
 
 
-def iter_audio(engine: Any, text: str, **params: Any) -> Iterator[tuple[int, int, bytes]]:
-    """(rate, channels, PCM) pieces of `text`, each made as it is asked for."""
-    plugin = engine.engine
-    text = plugin.validate_ssml(text)
-    if all(hasattr(plugin, name) for name in ("get_model", "get_default_voice", "model_manager")):
-        # The request resolved as /v2/synthesize resolves it: the configured voice when none is
-        # asked for, and only the arguments get_tts takes.
-        kwargs = plugin._get_ctxt(dict(params)).synth_kwargs
-        return _phoonnx(plugin, text, kwargs.get("lang"), kwargs.get("voice"))
-    return _whole(engine, text, params)
+def _progressive(engine: Any) -> bool:
+    # On a big-endian host the wave module swaps the bytes after this copy is taken.
+    return (sys.byteorder == "little"
+            and type(engine.engine).__module__.partition(".")[0] in PROGRESSIVE)
+
+
+class _End:
+    """The synthesis is over: the file it answered with, or why it failed."""
+
+    def __init__(self, path: Any = None, error: BaseException | None = None) -> None:
+        self.path, self.error = path, error
+
+
+def iter_audio(engine: Any, text: str, **params: Any) -> Iterator[Piece]:
+    """The audio of `text`, a piece at a time, each handed on when the engine has written it.
+
+    `params` go to the engine untouched, as `/v2/synthesize` passes them."""
+    if not _progressive(engine):
+        path, _ = engine.synthesize(text, **params)
+        yield from _file(path)
+        return
+
+    pieces: queue.SimpleQueue[Piece | _End] = queue.SimpleQueue()
+    writers: list[wave.Wave_write] = []
+
+    def sink(writer: wave.Wave_write, data: Any) -> None:
+        if not writers:
+            writers.append(writer)
+        if writer is not writers[0]:
+            return  # an utterance is one file; a second one is not the answer
+        pcm = bytes(data) if isinstance(data, (bytes, bytearray)) else bytes(
+            memoryview(data).cast("B"))
+        if pcm:
+            pieces.put((writer.getframerate(), writer.getnchannels(), writer.getsampwidth(), pcm))
+
+    def synthesise() -> None:
+        _request.sink = sink
+        # Whatever ends this thread, the request is told: it is waiting on the queue.
+        end = _End(error=RuntimeError("the synthesis stopped without an answer"))
+        try:
+            path, _ = engine.synthesize(text, **params)
+            end = _End(path=path)
+        except Exception as error:  # noqa: BLE001 - raised again, by the request it belongs to
+            end = _End(error=error)
+        finally:
+            _request.sink = None
+            pieces.put(end)
+
+    threading.Thread(target=synthesise, name="tts-stream", daemon=True).start()
+    sent = 0
+    while True:
+        piece = pieces.get()
+        if isinstance(piece, _End):
+            if piece.error is not None:
+                raise piece.error
+            if not sent:  # from the sentence cache: nothing was written this time
+                yield from _file(piece.path)
+            else:
+                _compare(piece.path, sent)
+            return
+        sent += len(piece[3])
+        yield piece
+
+
+def _compare(path: Any, sent: int) -> None:
+    """Say so when the file the engine answered with is not what was sent on the way."""
+    try:
+        with wave.open(str(path), "rb") as clip:
+            held = clip.getnframes() * clip.getnchannels() * clip.getsampwidth()
+    except (OSError, EOFError, wave.Error) as error:
+        LOG.warning("stream: sent %d bytes of audio, but the file cannot be read: %s", sent, error)
+        return
+    if held != sent:
+        LOG.warning("stream: sent %d bytes of audio, the file holds %d; /v2/synthesize would "
+                    "have answered differently", sent, held)
 
 
 def make_stream_router(engine: Any) -> Any:
-
+    install_tee()
     router = APIRouter()
 
     @router.get("/v2/synthesize/stream")
@@ -118,15 +178,18 @@ def make_stream_router(engine: Any) -> Any:
         if first is None:
             return Response('{"error": "No audio"}', status_code=422,
                             media_type="application/json")
-        rate, channels, _ = first
+        rate, channels, width, _ = first
 
         def body() -> Iterator[bytes]:
-            yield wav_header(rate, channels)
-            yield first[2]
-            for r, c, pcm in pieces:
-                if (r, c) != (rate, channels):
-                    return  # the header is already sent; a different format cannot follow
-                yield pcm
+            try:
+                yield wav_header(rate, channels, width)
+                yield first[3]
+                for r, c, w, pcm in pieces:
+                    if (r, c, w) != (rate, channels, width):
+                        return  # the header is already sent; a different format cannot follow
+                    yield pcm
+            finally:
+                pieces.close()
 
         return StreamingResponse(body(), media_type="audio/wav", headers={
             "Cache-Control": "no-store", "X-Accel-Buffering": "no"})

@@ -1,10 +1,8 @@
-import io
+import logging
 import struct
-import sys
-import types
+import threading
 import wave
 
-import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -12,127 +10,210 @@ from fastapi.testclient import TestClient
 import ovos_tts_stream as s
 
 
-class Chunk:
-    def __init__(self, n, rate=22050):
-        self.sample_rate, self.sample_channels = rate, 1
-        self.audio_int16_bytes = (np.arange(n, dtype=np.int16)).tobytes()
+def pcm(samples, value):
+    return struct.pack("<h", value) * samples
 
 
-class Voice:
-    def __init__(self, log):
-        self.log = log
-
-    def synthesize(self, text, config):
-        for i, sentence in enumerate(text.split(". ")):
-            self.log.append(("made", i))  # a sentence is made only when the reader asks for it
-            yield Chunk(100 + i)
+def sentence(i):
+    """What the engine below writes for the i-th sentence of a text."""
+    return pcm(100 + i, i + 1)
 
 
 class Plugin:
-    lang = "en-US"
-    log: list = []
+    """Stands for the phoonnx plugin; only where it lives is read."""
 
-    def __init__(self):
-        self.model_manager = types.SimpleNamespace(voices={"configured/voice": self.get_default_voice("x"),
-                                                           "asked/voice": self.get_default_voice("x")})
 
-    voice = "configured/voice"
+Plugin.__module__ = "phoonnx.opm"
 
-    def _get_ctxt(self, kwargs):
-        kwargs = dict(kwargs)
-        kwargs.setdefault("voice", self.voice)
-        return types.SimpleNamespace(synth_kwargs=kwargs)
 
-    def validate_ssml(self, text):
-        return text
+class OtherPlugin:
+    """A plugin nobody has checked to write its file as it goes."""
 
-    def get_default_voice(self, lang):
-        return types.SimpleNamespace(voice_id="v", config=types.SimpleNamespace(
-            add_diacritics=False, noise_scale=0.6, length_scale=1.0, noise_w_scale=0.8))
 
-    def get_model(self, voice):
-        self.log.append(("voice", voice))
-        return Voice(self.log)
+class Engine:
+    """ovos-tts-server's engine wrapper, over a plugin that writes its WAV a sentence at a
+    time, as phoonnx does."""
 
-    def _cfg_opt(self, default, *keys):
-        return default
+    def __init__(self, folder, plugin=None, rate=22050, gate=None):
+        self.engine = plugin or Plugin()
+        self.folder, self.rate, self.gate = folder, rate, gate
+        self.calls = []
+        self.written = []
 
-    def _resolve_speaker(self, info):
-        return None
+    def synthesize(self, text, **params):
+        self.calls.append((text, params))
+        path = self.folder / f"{len(self.calls)}.wav"
+        with wave.open(str(path), "wb") as out:
+            out.setnchannels(1), out.setsampwidth(2), out.setframerate(self.rate)
+            for i, _ in enumerate(text.split(". ")):
+                if i and self.gate is not None:
+                    assert self.gate.wait(5), "the reader never came back for more"
+                out.writeframes(sentence(i))
+                self.written.append(i)
+        return str(path), None
+
+
+def frames(path):
+    with wave.open(str(path), "rb") as clip:
+        return clip.readframes(clip.getnframes())
+
+
+def a_file(path, data, rate=16000):
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1), out.setsampwidth(2), out.setframerate(rate)
+        out.writeframes(data)
+    return str(path)
 
 
 @pytest.fixture(autouse=True)
-def fake_phoonnx(monkeypatch):
-    mod = types.ModuleType("phoonnx.voice")
-    mod.SynthesisConfig = lambda **kw: kw
-    monkeypatch.setitem(sys.modules, "phoonnx", types.ModuleType("phoonnx"))
-    monkeypatch.setitem(sys.modules, "phoonnx.voice", mod)
-    Plugin.log = []
+def tee(monkeypatch):
+    # What add_streaming() does to the wave module, undone after each test.
+    monkeypatch.setattr(wave.Wave_write, "writeframesraw", s._tee)
 
 
-def client(plugin):
+def client(engine):
     app = FastAPI()
-    s.add_streaming(app, types.SimpleNamespace(engine=plugin, synthesize=None))
+    s.add_streaming(app, engine)
     return TestClient(app)
 
 
-def test_header_says_length_is_unknown_and_reads_as_wav_to_the_end():
+def test_header_says_length_is_unknown_and_carries_the_format():
     head = s.wav_header(22050)
     assert head[:4] == b"RIFF" and struct.unpack("<I", head[4:8])[0] == 0xFFFFFFFF
     assert struct.unpack("<IHHII", head[16:32])[1:] == (1, 1, 22050, 44100)
+    assert struct.unpack("<HH", s.wav_header(48000, 2, 3)[32:36]) == (6, 24)
 
 
-def test_each_sentence_arrives_in_order_after_one_header():
-    r = client(Plugin()).get("/v2/synthesize/stream", params={"utterance": "One. Two. Three"})
+def test_each_sentence_arrives_in_order_after_one_header(tmp_path):
+    engine = Engine(tmp_path, rate=44100)
+    r = client(engine).get("/v2/synthesize/stream", params={"utterance": "One. Two. Three"})
     assert r.status_code == 200 and r.headers["content-type"] == "audio/wav"
-    body = r.content
-    assert body[:4] == b"RIFF"
-    assert len(body) - 44 == 2 * (100 + 101 + 102)
-    assert Plugin.log == [("voice", "configured/voice"), ("made", 0), ("made", 1), ("made", 2)]
+    assert r.content[:4] == b"RIFF" and struct.unpack("<I", r.content[24:28])[0] == 44100
+    assert r.content[44:] == sentence(0) + sentence(1) + sentence(2)
 
 
-def test_a_voice_in_the_request_wins_over_the_configured_one():
-    client(Plugin()).get("/v2/synthesize/stream", params={"utterance": "x", "voice": "asked/voice"})
-    assert ("voice", "asked/voice") in Plugin.log
+def test_the_answer_is_the_file_the_engine_wrote(tmp_path):
+    r = client(Engine(tmp_path)).get("/v2/synthesize/stream", params={"utterance": "One. Two"})
+    assert r.content[44:] == frames(tmp_path / "1.wav")
 
 
-def test_the_second_sentence_is_not_made_before_the_first_was_sent():
-    pieces = s.iter_audio(types.SimpleNamespace(engine=Plugin()), "One. Two")
-    next(pieces)
-    assert ("made", 0) in Plugin.log and ("made", 1) not in Plugin.log
+def test_the_first_sentence_is_sent_before_the_second_is_written(tmp_path):
+    gate = threading.Event()
+    engine = Engine(tmp_path, gate=gate)
+    pieces = s.iter_audio(engine, "One. Two")
+    assert next(pieces)[3] == sentence(0)
+    assert 1 not in engine.written  # the engine is waiting for the gate; the reader has audio
+    gate.set()
+    assert b"".join(piece[3] for piece in pieces) == sentence(1)
 
 
-def test_missing_utterance_is_a_400():
-    assert client(Plugin()).get("/v2/synthesize/stream").status_code == 400
+def test_request_parameters_reach_the_engine_untouched(tmp_path):
+    engine = Engine(tmp_path)
+    client(engine).get("/v2/synthesize/stream", params={
+        "utterance": "x", "voice": "asked/voice", "lang": "fr-FR", "length_scale": "1.2"})
+    assert engine.calls == [("x", {"voice": "asked/voice", "lang": "fr-FR", "length_scale": "1.2"})]
 
 
-def test_an_engine_that_fails_says_so_with_a_status():
-    plugin = Plugin()
-    plugin.get_model = lambda v: (_ for _ in ()).throw(RuntimeError("no voice"))
-    with pytest.raises(RuntimeError):
-        client(plugin).get("/v2/synthesize/stream", params={"utterance": "x"})
+def test_missing_utterance_is_a_400(tmp_path):
+    assert client(Engine(tmp_path)).get("/v2/synthesize/stream").status_code == 400
 
 
-def test_engines_that_cannot_stream_answer_in_one_piece(tmp_path):
-    path = tmp_path / "a.wav"
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000)
-        w.writeframes(b"\1\0" * 40000)
-    plain = types.SimpleNamespace(validate_ssml=lambda t: t)  # no get_model: not phoonnx
-    engine = types.SimpleNamespace(engine=plain, synthesize=lambda t, **kw: (str(path), None))
-    app = FastAPI()
-    s.add_streaming(app, engine)
-    r = TestClient(app).get("/v2/synthesize/stream", params={"utterance": "hi"})
-    assert r.status_code == 200 and len(r.content) - 44 == 80000
-    assert struct.unpack("<IHHI", r.content[16:28])[3] == 16000
+@pytest.mark.parametrize("plugin", [Plugin, OtherPlugin])
+def test_an_engine_that_fails_says_so_with_a_status(tmp_path, plugin):
+    engine = Engine(tmp_path, plugin())
+
+    def fail(text, **params):
+        raise RuntimeError("no such voice")
+
+    engine.synthesize = fail
+    with pytest.raises(RuntimeError, match="no such voice"):
+        client(engine).get("/v2/synthesize/stream", params={"utterance": "x"})
+    assert TestClient(client(engine).app, raise_server_exceptions=False).get(
+        "/v2/synthesize/stream", params={"utterance": "x"}).status_code == 500
 
 
-def test_phoonnx_1_3_plugin_without_cfg_opt_still_streams():
-    class Legacy(Plugin):
-        _cfg_opt = None
+def test_text_that_gives_no_audio_is_a_422(tmp_path):
+    engine = Engine(tmp_path)
+    engine.synthesize = lambda text, **params: (a_file(tmp_path / "empty.wav", b""), None)
+    assert client(engine).get("/v2/synthesize/stream", params={"utterance": "..."}).status_code == 422
 
-    plugin = Legacy()
-    plugin.config = {"noise-scale": 0.3}
-    cfg = s._synth_config(plugin, plugin.get_default_voice("x"))
-    assert cfg["noise_scale"] == 0.3 and cfg["length_scale"] == 1.0
-    assert "speaker_id" not in cfg
+
+def test_an_answer_from_the_sentence_cache_is_sent_whole(tmp_path):
+    cached = a_file(tmp_path / "cached.wav", pcm(40000, 7))
+    engine = Engine(tmp_path)
+    engine.synthesize = lambda text, **params: (cached, None)  # nothing is written this time
+    r = client(engine).get("/v2/synthesize/stream", params={"utterance": "hi"})
+    assert r.status_code == 200 and r.content[44:] == pcm(40000, 7)
+    assert struct.unpack("<I", r.content[24:28])[0] == 16000
+
+
+def test_a_plugin_not_known_to_write_as_it_goes_is_answered_from_its_file(tmp_path):
+    engine = Engine(tmp_path, OtherPlugin())
+    draft = engine.synthesize
+
+    def rework(text, **params):
+        draft(text, **params)  # written a sentence at a time, then replaced
+        return a_file(tmp_path / "final.wav", pcm(500, 9)), None
+
+    engine.synthesize = rework
+    r = client(engine).get("/v2/synthesize/stream", params={"utterance": "One. Two"})
+    assert r.content[44:] == pcm(500, 9)
+
+
+def test_a_second_file_written_for_the_same_request_is_not_sent(tmp_path):
+    engine = Engine(tmp_path)
+    answer = engine.synthesize
+
+    def with_a_side_file(text, **params):
+        result = answer(text, **params)
+        a_file(tmp_path / "side.wav", pcm(300, 5))
+        return result
+
+    engine.synthesize = with_a_side_file
+    r = client(engine).get("/v2/synthesize/stream", params={"utterance": "One. Two"})
+    assert r.content[44:] == sentence(0) + sentence(1)
+
+
+def test_it_says_so_when_the_file_is_not_what_was_sent(tmp_path, caplog):
+    engine = Engine(tmp_path)
+    answer = engine.synthesize
+
+    def reworked(text, **params):
+        answer(text, **params)
+        return a_file(tmp_path / "final.wav", pcm(500, 9)), None
+
+    engine.synthesize = reworked
+    with caplog.at_level(logging.WARNING, logger="ovos_tts_stream"):
+        list(s.iter_audio(engine, "One. Two"))
+    assert "would have answered differently" in caplog.text
+
+
+def test_two_requests_at_once_each_get_their_own_audio(tmp_path):
+    both_writing = threading.Barrier(2, timeout=5)
+
+    class Busy(Engine):
+        def synthesize(self, text, **params):
+            path = self.folder / f"{text}.wav"
+            with wave.open(str(path), "wb") as out:
+                out.setnchannels(1), out.setsampwidth(2), out.setframerate(self.rate)
+                out.writeframes(pcm(200, len(text)))
+                both_writing.wait()  # both requests are now half-way through their file
+                out.writeframes(pcm(300, len(text)))
+            return str(path), None
+
+    engine, got = Busy(tmp_path), {}
+
+    def ask(text):
+        got[text] = b"".join(piece[3] for piece in s.iter_audio(engine, text))
+
+    askers = [threading.Thread(target=ask, args=(text,)) for text in ("ab", "abcdef")]
+    for asker in askers:
+        asker.start()
+    for asker in askers:
+        asker.join(10)
+    assert got == {"ab": pcm(500, 2), "abcdef": pcm(500, 6)}
+
+
+def test_a_file_written_outside_a_request_is_left_alone(tmp_path):
+    client(Engine(tmp_path))  # the route is installed
+    assert frames(a_file(tmp_path / "plain.wav", pcm(10, 3))) == pcm(10, 3)

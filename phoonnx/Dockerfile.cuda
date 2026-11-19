@@ -55,8 +55,6 @@ RUN apt-get update \
 
 USER ${USER}
 
-COPY --chown=${USER}:${USER} phoonnx/stream /tmp/stream
-
 RUN python -m pip install --no-cache-dir --upgrade pip wheel \
     && python -m pip install --no-cache-dir \
         "ovos-tts-server==${OVOS_TTS_SERVER_REF}" \
@@ -67,13 +65,19 @@ RUN python -m pip install --no-cache-dir --upgrade pip wheel \
         phoonnx_ref="${PHOONNX_REF}"; \
     fi \
     && python -m pip install --no-cache-dir \
-        "phoonnx @ git+${PHOONNX_REPOSITORY}@${phoonnx_ref}" \
+        "phoonnx[espeak] @ git+${PHOONNX_REPOSITORY}@${phoonnx_ref}" \
     && python -m pip uninstall -y onnxruntime \
     && python -m pip install --no-cache-dir --no-deps \
         "onnxruntime-gpu==${ONNXRUNTIME_GPU_REF}" \
     && python -c \
         "import onnxruntime as ort; assert 'CUDAExecutionProvider' in ort.get_available_providers(), ort.get_available_providers()" \
-    && python -m pip install --no-cache-dir /tmp/stream \
+    && rm -rf /home/${USER}/.cache/pip
+
+# The streaming route (phoonnx/stream), in a layer of its own: a change to it does not
+# rebuild the layer above.
+COPY --chown=${USER}:${USER} phoonnx/stream /tmp/stream
+
+RUN python -m pip install --no-cache-dir /tmp/stream \
     && rm -rf /home/${USER}/.cache/pip
 
 WORKDIR /home/${USER}

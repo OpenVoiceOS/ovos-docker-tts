@@ -38,17 +38,21 @@ RUN apt-get update \
 
 USER $USER
 
-COPY --chown=ovos:ovos phoonnx/stream /tmp/stream
-
 RUN if [ "${ALPHA}" == "true" ]; then \
         pip3 install --no-cache-dir --pre "gradio-client<1.0" "setuptools<81" ovos-tts-server ovos-classifiers \
-            "phoonnx @ git+https://github.com/TigreGotico/phoonnx.git@dev"; \
+            "phoonnx[espeak] @ git+https://github.com/TigreGotico/phoonnx.git@dev"; \
     else \
         pip3 install --no-cache-dir "gradio-client<1.0" "setuptools<81" ovos-tts-server ovos-classifiers \
-            "phoonnx @ git+https://github.com/TigreGotico/phoonnx.git@${PHOONNX_REF}"; \
+            "phoonnx[espeak] @ git+https://github.com/TigreGotico/phoonnx.git@${PHOONNX_REF}"; \
     fi \
-    && pip3 install --no-cache-dir /tmp/stream \
     && mkdir -p /home/${USER}/.cache/phoonnx /home/${USER}/gradio_cached_examples \
+    && rm -rf /home/${USER}/.cache/pip
+
+# The streaming route (phoonnx/stream), in a layer of its own: a change to it does not
+# rebuild the layer above.
+COPY --chown=ovos:ovos phoonnx/stream /tmp/stream
+
+RUN pip3 install --no-cache-dir /tmp/stream \
     && rm -rf /home/${USER}/.cache/pip
 
 # ovos-tts-server plus GET /v2/synthesize/stream (phoonnx/stream)
