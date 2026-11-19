@@ -1,7 +1,9 @@
 import logging
+import queue
 import struct
 import sys
 import threading
+import time
 import types
 import wave
 
@@ -241,3 +243,69 @@ def test_the_launcher_hands_create_app_whatever_the_server_passes(tmp_path, monk
     assert seen["enable_mcp"] is True
     # The route is there: without an utterance it answers 400, not 404.
     assert TestClient(seen["app"]).get("/v2/synthesize/stream").status_code == 400
+
+
+def test_with_tts_transformers_configured_the_finished_file_is_sent(tmp_path):
+    engine = Engine(tmp_path)
+    engine.tts_transformers = types.SimpleNamespace(plugins=["a-transformer"])
+    written = engine.synthesize
+
+    def transformed(text, **params):
+        written(text, **params)  # the plugin writes its sentences; the server then reworks a copy
+        return a_file(tmp_path / "transformed.wav", pcm(201, 9), rate=22050), None
+
+    engine.synthesize = transformed
+    r = client(engine).get("/v2/synthesize/stream", params={"utterance": "One. Two"})
+    assert r.content[44:] == pcm(201, 9)  # the same length as what was written, other samples
+
+
+def test_a_server_with_no_transformer_loaded_still_sends_as_it_goes(tmp_path):
+    engine = Engine(tmp_path)
+    engine.tts_transformers = types.SimpleNamespace(plugins=[])
+    assert s._progressive(engine)
+    engine.tts_transformers = types.SimpleNamespace(plugins=["a-transformer"])
+    assert not s._progressive(engine)
+
+
+def test_it_says_so_when_the_file_differs_at_the_same_length(tmp_path, caplog):
+    engine = Engine(tmp_path)
+    written = engine.synthesize
+
+    def reworked(text, **params):
+        written(text, **params)
+        return a_file(tmp_path / "same-length.wav", pcm(201, 9), rate=22050), None
+
+    engine.synthesize = reworked
+    with caplog.at_level(logging.WARNING, logger="ovos_tts_stream"):
+        list(s.iter_audio(engine, "One. Two"))
+    assert "would have answered differently" in caplog.text
+
+
+def test_when_the_reader_leaves_nothing_more_is_copied(tmp_path, monkeypatch):
+    puts, real = [], queue.SimpleQueue
+
+    class Recording:
+        """The queue between the engine's thread and the reader, with a note of every put."""
+
+        def __init__(self):
+            self.inner = real()
+
+        def put(self, item):
+            puts.append(item)
+            self.inner.put(item)
+
+        def get(self):
+            return self.inner.get()
+
+    monkeypatch.setattr(s.queue, "SimpleQueue", Recording)
+    gate = threading.Event()
+    engine = Engine(tmp_path, gate=gate)
+    pieces = s.iter_audio(engine, "One. Two")
+    assert next(pieces)[3] == sentence(0)
+    pieces.close()  # the reader has gone
+    gate.set()  # the engine goes on to its second sentence, for the caches
+    deadline = time.time() + 5
+    while not any(isinstance(item, s._End) for item in puts) and time.time() < deadline:
+        time.sleep(0.01)
+    assert engine.written == [0, 1]  # the synthesis ran to its end
+    assert [item[3] for item in puts if not isinstance(item, s._End)] == [sentence(0)]

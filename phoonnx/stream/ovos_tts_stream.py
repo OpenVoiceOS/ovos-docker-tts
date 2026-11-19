@@ -11,14 +11,16 @@ the engine is done again here, so the voice, the parameters, SSML, the voice cac
 sentence cache are those of `/v2/synthesize`, whatever the version of the plugin.
 
 The WAV header says the length is unknown (both size fields 0xFFFFFFFF), as streaming WAV does;
-readers that need a length read to the end. An utterance answered from the sentence cache, and
-an engine not known to write its file piece by piece, are sent in one piece: the same audio
-`/v2/synthesize` gives.
+readers that need a length read to the end. Three cases are sent in one piece, from the finished
+file, because only that is the audio `/v2/synthesize` gives: an utterance answered from the
+sentence cache, an engine not known to write its file piece by piece, and a server with
+`tts_transformers` configured, which reworks the file after the engine has written it.
 
 `ovos-tts-server-stream` is `ovos-tts-server` with this route added; same arguments.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import queue
 import struct
@@ -84,9 +86,12 @@ def _file(path: Any) -> Iterator[Piece]:
 
 
 def _progressive(engine: Any) -> bool:
-    # On a big-endian host the wave module swaps the bytes after this copy is taken.
-    return (sys.byteorder == "little"
-            and type(engine.engine).__module__.partition(".")[0] in PROGRESSIVE)
+    """Whether what the plugin writes is what `/v2/synthesize` answers with."""
+    if sys.byteorder != "little":
+        return False  # the wave module swaps the bytes after this copy is taken
+    if getattr(getattr(engine, "tts_transformers", None), "plugins", None):
+        return False  # ovos-tts-server 1.15 reworks the file once the plugin has written it
+    return type(engine.engine).__module__.partition(".")[0] in PROGRESSIVE
 
 
 class _End:
@@ -107,8 +112,11 @@ def iter_audio(engine: Any, text: str, **params: Any) -> Iterator[Piece]:
 
     pieces: queue.SimpleQueue[Piece | _End] = queue.SimpleQueue()
     writers: list[wave.Wave_write] = []
+    gone = threading.Event()  # the reader left: nothing more is worth copying
 
     def sink(writer: wave.Wave_write, data: Any) -> None:
+        if gone.is_set():
+            return
         if not writers:
             writers.append(writer)
         if writer is not writers[0]:
@@ -132,32 +140,37 @@ def iter_audio(engine: Any, text: str, **params: Any) -> Iterator[Piece]:
             pieces.put(end)
 
     threading.Thread(target=synthesise, name="tts-stream", daemon=True).start()
-    sent = 0
-    while True:
-        piece = pieces.get()
-        if isinstance(piece, _End):
-            if piece.error is not None:
-                raise piece.error
-            if not sent:  # from the sentence cache: nothing was written this time
-                yield from _file(piece.path)
-            else:
-                _compare(piece.path, sent)
-            return
-        sent += len(piece[3])
-        yield piece
+    sent, digest = 0, hashlib.blake2b()
+    try:
+        while True:
+            piece = pieces.get()
+            if isinstance(piece, _End):
+                if piece.error is not None:
+                    raise piece.error
+                if not sent:  # from the sentence cache: nothing was written this time
+                    yield from _file(piece.path)
+                else:
+                    _compare(piece.path, sent, digest.digest())
+                return
+            sent += len(piece[3])
+            digest.update(piece[3])
+            yield piece
+    finally:
+        # The synthesis runs on to its end, for the caches' sake, but no longer into the queue.
+        gone.set()
 
 
-def _compare(path: Any, sent: int) -> None:
+def _compare(path: Any, sent: int, digest: bytes) -> None:
     """Say so when the file the engine answered with is not what was sent on the way."""
     try:
         with wave.open(str(path), "rb") as clip:
-            held = clip.getnframes() * clip.getnchannels() * clip.getsampwidth()
+            held = clip.readframes(clip.getnframes())
     except (OSError, EOFError, wave.Error) as error:
         LOG.warning("stream: sent %d bytes of audio, but the file cannot be read: %s", sent, error)
         return
-    if held != sent:
-        LOG.warning("stream: sent %d bytes of audio, the file holds %d; /v2/synthesize would "
-                    "have answered differently", sent, held)
+    if len(held) != sent or hashlib.blake2b(held).digest() != digest:
+        LOG.warning("stream: the %d bytes of audio sent are not the %d the file holds; "
+                    "/v2/synthesize would have answered differently", sent, len(held))
 
 
 def make_stream_router(engine: Any) -> Any:
