@@ -55,6 +55,21 @@ RUN apt-get update \
 
 USER ${USER}
 
+# scriptconv[...] installs the phonemizers that phoonnx leaves out. A voice that needs one of
+# them fails without it, or reads Arabic and Hebrew without their vowels:
+#   espeak    the eSpeak wrapper, which the espeak extra of phoonnx 1.64 no longer installs
+#   he        the Hebrew voices
+#   misaki    the English, Japanese and Chinese voices of Kokoro
+#   pt        the Portuguese voices of Kokoro, on phoonnx 1.64
+#   tashkeel  the vowel marks of Arabic text
+# The floor is the one the dev branch of phoonnx asks for. It names a pre-release, and pip takes
+# scriptconv's alpha line for this requirement only when the requirement itself names one.
+# misaki's English extra also asks for a spaCy transformer tagger and, through it, for PyTorch.
+# scriptconv does not use the tagger, but spaCy imports both when they are installed (190 MB of
+# memory, 0.9 GB of image). PyTorch's CPU wheel goes in first, so that the resolver does not
+# take the CUDA wheel with its own CUDA libraries, and both are removed again. The spaCy model
+# is installed here because misaki would otherwise fetch it with pip on the first request. The
+# G2P call fails the build if English does not load without the removed packages.
 RUN python -m pip install --no-cache-dir --upgrade pip wheel \
     && python -m pip install --no-cache-dir \
         "ovos-tts-server==${OVOS_TTS_SERVER_REF}" \
@@ -64,8 +79,16 @@ RUN python -m pip install --no-cache-dir --upgrade pip wheel \
     else \
         phoonnx_ref="${PHOONNX_REF}"; \
     fi \
+    && python -m pip install --no-cache-dir --no-deps \
+        --index-url https://download.pytorch.org/whl/cpu torch \
     && python -m pip install --no-cache-dir \
         "phoonnx[espeak] @ git+${PHOONNX_REPOSITORY}@${phoonnx_ref}" \
+        "scriptconv[espeak,he,misaki,pt,tashkeel]>=0.0.4a123" \
+    && python -m pip uninstall -y \
+        spacy-curated-transformers curated-transformers curated-tokenizers \
+        torch sympy mpmath networkx \
+    && python -m spacy download en_core_web_sm \
+    && python -c "from misaki import en; en.G2P()('The image can speak English.')" \
     && python -m pip uninstall -y onnxruntime \
     && python -m pip install --no-cache-dir --no-deps \
         "onnxruntime-gpu==${ONNXRUNTIME_GPU_REF}" \

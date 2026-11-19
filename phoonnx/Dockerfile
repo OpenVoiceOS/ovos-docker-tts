@@ -38,9 +38,36 @@ RUN apt-get update \
 
 USER $USER
 
+# With ALPHA=true, scriptconv[...] installs the phonemizers that phoonnx leaves out. A voice
+# that needs one of them fails without it, or reads Arabic and Hebrew without their vowels:
+#   espeak    the eSpeak wrapper
+#   he        the Hebrew voices
+#   misaki    the English, Japanese and Chinese voices of Kokoro
+#   pt        the sense marks of European Portuguese
+#   tashkeel  the vowel marks of Arabic text
+# The floor is the one the dev branch of phoonnx asks for. It names a pre-release, and pip takes
+# scriptconv's alpha line for this requirement only when the requirement itself names one.
+# phoonnx 1.3, the other branch, is left as it was: it has no Kokoro voices, and its Hebrew
+# voices read only text that already carries its vowel marks, whatever is installed.
+# misaki's English extra also asks for a spaCy transformer tagger and, through it, for PyTorch.
+# scriptconv does not use the tagger, but spaCy imports both when they are installed (190 MB of
+# memory, 0.9 GB of image). PyTorch's CPU wheel goes in first, so that the resolver does not
+# take the CUDA wheel with its CUDA libraries, and both are removed again. The spaCy model is
+# installed here because misaki would otherwise fetch it with pip on the first request. The G2P
+# call fails the build if English does not load without the removed packages.
+# tokenizers<1: --pre takes the 1.0 release candidates, which have no Tokenizer.encode; the
+# Hebrew vowel marks call it, and the voice reads the bare letters when it fails.
 RUN if [ "${ALPHA}" == "true" ]; then \
-        pip3 install --no-cache-dir --pre "gradio-client<1.0" "setuptools<81" ovos-tts-server ovos-classifiers \
-            "phoonnx[espeak] @ git+https://github.com/TigreGotico/phoonnx.git@dev"; \
+        pip3 install --no-cache-dir --no-deps --index-url https://download.pytorch.org/whl/cpu torch \
+        && pip3 install --no-cache-dir --pre "gradio-client<1.0" "setuptools<81" "tokenizers<1" \
+            ovos-tts-server ovos-classifiers \
+            "phoonnx[espeak] @ git+https://github.com/TigreGotico/phoonnx.git@dev" \
+            "scriptconv[espeak,he,misaki,pt,tashkeel]>=0.0.4a123" \
+        && pip3 uninstall -y \
+            spacy-curated-transformers curated-transformers curated-tokenizers \
+            torch sympy mpmath networkx \
+        && python -m spacy download en_core_web_sm \
+        && python -c "from misaki import en; en.G2P()('The image can speak English.')"; \
     else \
         pip3 install --no-cache-dir "gradio-client<1.0" "setuptools<81" ovos-tts-server ovos-classifiers \
             "phoonnx[espeak] @ git+https://github.com/TigreGotico/phoonnx.git@${PHOONNX_REF}"; \
