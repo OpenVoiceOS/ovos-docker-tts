@@ -209,8 +209,9 @@ def main() -> None:
 
     create_app = ovos_tts_server.create_app
 
-    def create_streaming_app(tts_engine: Any) -> FastAPI:
-        return add_streaming(create_app(tts_engine), tts_engine)
+    def create_streaming_app(tts_engine: Any, *args: Any, **kwargs: Any) -> FastAPI:
+        # Whatever else the server passes (newer versions add enable_mcp) is its own business.
+        return add_streaming(create_app(tts_engine, *args, **kwargs), tts_engine)
 
     ovos_tts_server.create_app = create_streaming_app
     serve()

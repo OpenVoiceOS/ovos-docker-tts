@@ -1,6 +1,8 @@
 import logging
 import struct
+import sys
 import threading
+import types
 import wave
 
 import pytest
@@ -217,3 +219,25 @@ def test_two_requests_at_once_each_get_their_own_audio(tmp_path):
 def test_a_file_written_outside_a_request_is_left_alone(tmp_path):
     client(Engine(tmp_path))  # the route is installed
     assert frames(a_file(tmp_path / "plain.wav", pcm(10, 3))) == pcm(10, 3)
+
+
+def test_the_launcher_hands_create_app_whatever_the_server_passes(tmp_path, monkeypatch):
+    seen = {}
+    server = types.ModuleType("ovos_tts_server")
+
+    def create_app(engine, enable_mcp=False):
+        seen["enable_mcp"] = enable_mcp
+        return FastAPI()
+
+    def serve():  # as ovos-tts-server 1.15 starts: it looks create_app up, and passes a keyword
+        seen["app"] = server.create_app(Engine(tmp_path), enable_mcp=True)
+
+    server.create_app = create_app
+    entry = types.ModuleType("ovos_tts_server.__main__")
+    entry.main = serve
+    monkeypatch.setitem(sys.modules, "ovos_tts_server", server)
+    monkeypatch.setitem(sys.modules, "ovos_tts_server.__main__", entry)
+    s.main()
+    assert seen["enable_mcp"] is True
+    # The route is there: without an utterance it answers 400, not 404.
+    assert TestClient(seen["app"]).get("/v2/synthesize/stream").status_code == 400
