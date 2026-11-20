@@ -140,6 +140,6 @@ RUN python -m pip install --no-cache-dir /tmp/stream \
 WORKDIR /home/${USER}
 
 # ovos-tts-server plus GET /v2/synthesize/stream (phoonnx/stream)
-ENTRYPOINT ["/home/ovos/.venv/bin/ovos-tts-server-stream", "--engine", "ovos-tts-plugin-phoonnx", "--cache"]
+ENTRYPOINT ["ovos-tts-server-stream", "--engine", "ovos-tts-plugin-phoonnx", "--cache"]
 
 EXPOSE 9666

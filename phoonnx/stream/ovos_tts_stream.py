@@ -14,7 +14,9 @@ The WAV header says the length is unknown (both size fields 0xFFFFFFFF), as stre
 readers that need a length read to the end. Three cases are sent in one piece, from the finished
 file, because only that is the audio `/v2/synthesize` gives: an utterance answered from the
 sentence cache, an engine not known to write its file piece by piece, and a server with
-`tts_transformers` configured, which reworks the file after the engine has written it.
+`tts_transformers` configured, which reworks the file after the engine has written it. A finished
+file that is not a WAV of plain samples (an engine that writes MP3) is answered as it is, with its
+own media type, as `/v2/synthesize` answers it.
 
 `ovos-tts-server-stream` is `ovos-tts-server` with this route added; same arguments.
 """
@@ -31,7 +33,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 LOG = logging.getLogger("ovos_tts_stream")
 
@@ -78,8 +80,20 @@ def wav_header(rate: int, channels: int = 1, width: int = 2) -> bytes:
     )
 
 
+class _Whole(Exception):
+    """The engine's file cannot be read as a WAV of plain samples: it is answered as it is."""
+
+    def __init__(self, path: Any) -> None:
+        super().__init__(str(path))
+        self.path = path
+
+
 def _file(path: Any) -> Iterator[Piece]:
-    with wave.open(str(path), "rb") as clip:
+    try:
+        clip = wave.open(str(path), "rb")
+    except (wave.Error, EOFError) as error:  # MP3, or a WAV the wave module does not read
+        raise _Whole(path) from error
+    with clip:
         rate, channels, width = clip.getframerate(), clip.getnchannels(), clip.getsampwidth()
         while data := clip.readframes(rate):  # a second at a time
             yield rate, channels, width, data
@@ -110,6 +124,9 @@ def iter_audio(engine: Any, text: str, **params: Any) -> Iterator[Piece]:
         yield from _file(path)
         return
 
+    # No size limit, on purpose: the synthesis must not wait for a slow reader, because it also
+    # fills the sentence cache. A slow reader therefore costs, at most, the samples of its own
+    # utterance in memory (about 5.8 MB a minute at 48 kHz, 16 bits, mono).
     pieces: queue.SimpleQueue[Piece | _End] = queue.SimpleQueue()
     writers: list[wave.Wave_write] = []
     gone = threading.Event()  # the reader left: nothing more is worth copying
@@ -187,7 +204,10 @@ def make_stream_router(engine: Any) -> Any:
         pieces = iter_audio(engine, utterance, **params)
         # The first piece is made before the answer starts, so an engine that fails says so
         # with a status, not with a body that stops.
-        first = next(pieces, None)
+        try:
+            first = next(pieces, None)
+        except _Whole as whole:
+            return FileResponse(whole.path)
         if first is None:
             return Response('{"error": "No audio"}', status_code=422,
                             media_type="application/json")

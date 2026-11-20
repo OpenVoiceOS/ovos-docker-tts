@@ -72,12 +72,12 @@ RUN pip3 install --no-cache-dir --no-deps --index-url https://download.pytorch.o
 
 # The streaming route (phoonnx/stream), in a layer of its own: a change to it does not
 # rebuild the layer above.
-COPY --chown=ovos:ovos phoonnx/stream /tmp/stream
+COPY --chown=${USER}:${USER} phoonnx/stream /tmp/stream
 
 RUN pip3 install --no-cache-dir /tmp/stream \
     && rm -rf /home/${USER}/.cache/pip
 
 # ovos-tts-server plus GET /v2/synthesize/stream (phoonnx/stream)
-ENTRYPOINT ["/home/ovos/.venv/bin/ovos-tts-server-stream", "--engine", "ovos-tts-plugin-phoonnx", "--cache"]
+ENTRYPOINT ["ovos-tts-server-stream", "--engine", "ovos-tts-plugin-phoonnx", "--cache"]
 
 EXPOSE 9666

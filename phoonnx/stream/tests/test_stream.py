@@ -164,6 +164,44 @@ def test_a_plugin_not_known_to_write_as_it_goes_is_answered_from_its_file(tmp_pa
     assert r.content[44:] == pcm(500, 9)
 
 
+class Mp3Engine:
+    """An engine whose plugin writes MP3, as ovos-tts-plugin-google-tx does."""
+
+    def __init__(self, folder, plugin=None):
+        self.engine = plugin or OtherPlugin()
+        self.folder = folder
+
+    def synthesize(self, text, **params):
+        path = self.folder / "answer.mp3"
+        path.write_bytes(b"ID3" + text.encode())
+        return str(path), None
+
+
+@pytest.mark.parametrize("plugin", [OtherPlugin, Plugin])
+def test_a_file_that_is_not_a_wav_is_answered_as_it_is(tmp_path, plugin):
+    # /v2/synthesize answers with the file itself; a 500 here would be a worse answer than that.
+    # With the phoonnx plugin the same holds for an answer from the sentence cache.
+    r = client(Mp3Engine(tmp_path, plugin())).get("/v2/synthesize/stream",
+                                                  params={"utterance": "One. Two"})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/mpeg"
+    assert r.content == b"ID3One. Two"
+
+
+def test_a_wav_the_wave_module_cannot_read_is_answered_as_it_is(tmp_path):
+    class FloatEngine(Mp3Engine):
+        def synthesize(self, text, **params):
+            path = self.folder / "answer.wav"
+            # format tag 3: IEEE float samples, which the wave module refuses
+            path.write_bytes(b"RIFF" + struct.pack("<I", 40) + b"WAVEfmt " + struct.pack(
+                "<IHHIIHH", 16, 3, 1, 16000, 64000, 4, 32) + b"data" + struct.pack("<I", 4) + bytes(4))
+            return str(path), None
+
+    r = client(FloatEngine(tmp_path)).get("/v2/synthesize/stream", params={"utterance": "One"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("audio/")
+    assert r.content[:4] == b"RIFF" and len(r.content) == 48
+
+
 def test_a_second_file_written_for_the_same_request_is_not_sent(tmp_path):
     engine = Engine(tmp_path)
     answer = engine.synthesize
