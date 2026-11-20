@@ -241,7 +241,7 @@ def test_a_path_that_is_not_a_string_and_a_file_with_nothing_in_it(tmp_path):
     r = odd.get("/v2/synthesize/stream", params={"utterance": "One"})
     assert (r.status_code, r.content) == (200, b"ID3One")
     r = odd.get("/v2/synthesize/stream", params={"utterance": "nothing"})
-    assert (r.status_code, r.content) == (200, b"")
+    assert (r.status_code, r.json()) == (422, {"error": "No audio"})
 
 
 def test_a_second_file_written_for_the_same_request_is_not_sent(tmp_path):

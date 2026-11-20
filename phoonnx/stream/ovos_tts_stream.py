@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import queue
 import struct
 import sys
@@ -97,6 +98,8 @@ def _plain(clip: Any) -> bool:
 
 
 def _file(path: Any) -> Iterator[Piece]:
+    if not os.path.getsize(str(path)):
+        return  # a file with nothing in it is no audio: the route says so, as for no file at all
     try:
         clip = wave.open(str(path), "rb")
     except (wave.Error, EOFError) as error:  # MP3, or a WAV the wave module does not read
