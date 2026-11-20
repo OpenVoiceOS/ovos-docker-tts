@@ -88,12 +88,22 @@ class _Whole(Exception):
         self.path = path
 
 
+def _plain(clip: Any) -> bool:
+    """Whether the samples are plain integers, the only kind the header sent here describes.
+
+    From Python 3.15 the wave module also reads and writes float samples, and has `getformat()`
+    to say so. Before that it refuses them, so whatever it opened is plain."""
+    return not hasattr(clip, "getformat") or clip.getformat() == wave.WAVE_FORMAT_PCM
+
+
 def _file(path: Any) -> Iterator[Piece]:
     try:
         clip = wave.open(str(path), "rb")
     except (wave.Error, EOFError) as error:  # MP3, or a WAV the wave module does not read
         raise _Whole(path) from error
     with clip:
+        if not _plain(clip):
+            raise _Whole(path)
         rate, channels, width = clip.getframerate(), clip.getnchannels(), clip.getsampwidth()
         while data := clip.readframes(rate):  # a second at a time
             yield rate, channels, width, data
@@ -138,6 +148,8 @@ def iter_audio(engine: Any, text: str, **params: Any) -> Iterator[Piece]:
             writers.append(writer)
         if writer is not writers[0]:
             return  # an utterance is one file; a second one is not the answer
+        if not _plain(writer):
+            return  # nothing is copied, so the finished file is answered, whole
         pcm = bytes(data) if isinstance(data, (bytes, bytearray)) else bytes(
             memoryview(data).cast("B"))
         if pcm:
@@ -207,7 +219,7 @@ def make_stream_router(engine: Any) -> Any:
         try:
             first = next(pieces, None)
         except _Whole as whole:
-            return FileResponse(whole.path)
+            return FileResponse(str(whole.path))
         if first is None:
             return Response('{"error": "No audio"}', status_code=422,
                             media_type="application/json")

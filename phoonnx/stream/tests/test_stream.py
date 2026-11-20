@@ -197,9 +197,51 @@ def test_a_wav_the_wave_module_cannot_read_is_answered_as_it_is(tmp_path):
                 "<IHHIIHH", 16, 3, 1, 16000, 64000, 4, 32) + b"data" + struct.pack("<I", 4) + bytes(4))
             return str(path), None
 
+    # Python before 3.15 refuses this file; from 3.15 it reads it. Either way the answer must be
+    # the file itself: the header this route sends would call the float samples integers.
     r = client(FloatEngine(tmp_path)).get("/v2/synthesize/stream", params={"utterance": "One"})
     assert r.status_code == 200 and r.headers["content-type"].startswith("audio/")
-    assert r.content[:4] == b"RIFF" and len(r.content) == 48
+    assert r.content == (tmp_path / "answer.wav").read_bytes()
+    assert struct.unpack("<H", r.content[20:22])[0] == 3
+
+
+@pytest.mark.skipif(not hasattr(wave.Wave_write, "setformat"), reason="the wave module writes float samples from Python 3.15")
+def test_float_samples_written_as_they_are_made_are_not_copied(tmp_path):
+    class FloatWriter(Engine):
+        def synthesize(self, text, **params):
+            path = self.folder / "float.wav"
+            with wave.open(str(path), "wb") as out:
+                out.setformat(wave.WAVE_FORMAT_IEEE_FLOAT)
+                out.setnchannels(1), out.setsampwidth(4), out.setframerate(16000)
+                out.writeframes(struct.pack("<f", 0.5) * 100)
+            return str(path), None
+
+    r = client(FloatWriter(tmp_path)).get("/v2/synthesize/stream", params={"utterance": "One"})
+    assert r.status_code == 200
+    assert r.content == (tmp_path / "float.wav").read_bytes()
+
+
+def test_a_path_that_is_not_a_string_and_a_file_with_nothing_in_it(tmp_path):
+    class Named:
+        """What an engine may return for a path: all that is asked of it is str()."""
+
+        def __init__(self, path):
+            self.path = path
+
+        def __str__(self):
+            return str(self.path)
+
+    class OddEngine(Mp3Engine):
+        def synthesize(self, text, **params):
+            path = self.folder / ("empty.wav" if text == "nothing" else "answer.mp3")
+            path.write_bytes(b"" if text == "nothing" else b"ID3" + text.encode())
+            return Named(path), None
+
+    odd = client(OddEngine(tmp_path))
+    r = odd.get("/v2/synthesize/stream", params={"utterance": "One"})
+    assert (r.status_code, r.content) == (200, b"ID3One")
+    r = odd.get("/v2/synthesize/stream", params={"utterance": "nothing"})
+    assert (r.status_code, r.content) == (200, b"")
 
 
 def test_a_second_file_written_for_the_same_request_is_not_sent(tmp_path):
