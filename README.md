@@ -15,6 +15,15 @@ docker build --build-arg TAG=alpha -t smartgic/ovos-tts-server-piper:alpha piper
 
 CUDA variants use `Dockerfile.cuda` and build on `smartgic/ovos-tts-server-base-cuda`. CUDA images exist for `base`, `piper`, and `phoonnx`.
 
+The `phoonnx` images are different in two points. They do not build on the base image. Their build context is the repository root, not the `phoonnx/` directory, because they install the package in `phoonnx/stream`:
+
+```sh
+docker build -f phoonnx/Dockerfile -t smartgic/ovos-tts-server-phoonnx:alpha .
+docker build -f phoonnx/Dockerfile.cuda -t smartgic/ovos-tts-server-phoonnx-cuda:alpha .
+```
+
+Their entrypoint is `ovos-tts-server-stream`. It is `ovos-tts-server` with one more route, `GET /v2/synthesize/stream`, which sends the audio while the engine makes it.
+
 Images publish to the Docker Hub `smartgic/` namespace. The image labels still point back to this repository as the source.
 
 ## Usage

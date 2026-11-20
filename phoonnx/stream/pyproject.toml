@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ovos-tts-stream"
+version = "0.1.0"
+description = "Streaming synthesis route for ovos-tts-server (phoonnx synthesises per sentence)"
+requires-python = ">=3.10"
+dependencies = ["ovos-tts-server", "fastapi"]
+
+[project.scripts]
+ovos-tts-server-stream = "ovos_tts_stream:main"
+
+[tool.setuptools]
+py-modules = ["ovos_tts_stream"]
