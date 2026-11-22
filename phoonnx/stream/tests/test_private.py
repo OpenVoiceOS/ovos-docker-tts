@@ -190,15 +190,16 @@ def test_the_log_is_configured_for_privacy(monkeypatch, tmp_path):
     monkeypatch.setattr(ovos_tts_server, "create_app", ovos_tts_server.create_app)
     monkeypatch.setattr(ovos_tts_server, "FileResponse", ovos_tts_server.FileResponse)
     monkeypatch.setattr(wave.Wave_write, "writeframesraw", wave.Wave_write.writeframesraw)
-    levels = {n: logging.getLogger(n).level for n in s.PRIVATE_LOGGERS}
+    levels = {n: logging.getLogger(n).level for n in (*s.PRIVATE_LOGGERS, "")}
     try:
         s.main()
         assert given["access_log"] is False
         assert given["host"] == "0.0.0.0" and given["port"] == 1  # the server's own arguments stand
         for name in s.PRIVATE_LOGGERS:
-            assert logging.getLogger(name).level == logging.ERROR
-        assert os.environ["OVOS_DEFAULT_LOG_LEVEL"] == "ERROR"
-        assert LOG.level == "ERROR"
+            assert logging.getLogger(name).level == logging.CRITICAL
+        assert os.environ["OVOS_DEFAULT_LOG_LEVEL"] == "CRITICAL"
+        assert LOG.level == "CRITICAL"
+        assert logging.getLogger().level == logging.CRITICAL
         # Every handler of uvicorn's log keeps an exception's type and drops its message.
         config = given["log_config"]
         assert config["filters"]["no_words"]["()"] == "ovos_tts_stream.NoWords"

@@ -78,6 +78,7 @@ def servers(tmp_path):
 
 def ask_everything(server):
     assert server.get("/v2/synthesize", utterance=f"say {SECRET} now")[0] == 200
+    assert server.get("/v2/synthesize", utterance=f"lose {SECRET}", lost="1")[0] == 200
     return server.get("/v2/synthesize", utterance=f"fail on {SECRET}", boom="1")
 
 
@@ -86,6 +87,12 @@ def test_a_control_server_logs_the_words(servers):
     ask_everything(server)
     _, log = server.stop()
     assert SECRET in log  # so the next test can fail
+    # Each way the text can reach the log is there in the open server, so that the private one's
+    # silence is a result: phoonnx's number error, a library's own logger, the root logger, the
+    # last-resort handler, asyncio's "never retrieved".
+    for line in ("failed to pronounce number", "cannot read", "root says", "module-level logging call",
+                 "Task exception was never retrieved", "task cannot say", "unread written form"):
+        assert line in log, line
 
 
 def test_a_private_server_logs_no_word_of_the_text(servers):
@@ -97,10 +104,21 @@ def test_a_private_server_logs_no_word_of_the_text(servers):
     assert SECRET not in log and "secretword" not in log.lower()
     assert "GET /v2/synthesize" not in log  # no access log line either
     assert "ValueError" in log  # the type of what failed is kept, for the operator
+    for line in ("pronounce", "cannot read", "root says", "module-level", "never retrieved", "task cannot",
+                 "unread written form", "saying"):
+        assert line not in log, line
 
 
-def test_a_private_server_logs_no_word_at_info_either(servers):
+def test_a_private_server_logs_no_word_at_the_default_level_either(servers):
     server = servers("private-info", OVOS_TTS_PRIVATE="1")
+    ask_everything(server)
+    _, log = server.stop()
+    assert SECRET not in log
+
+
+def test_a_private_server_logs_nothing_even_when_asked_for_everything(servers):
+    server = servers("private-all", OVOS_TTS_PRIVATE="1", OVOS_DEFAULT_LOG_LEVEL="DEBUG", PYTHONASYNCIODEBUG="1",
+                     PYTHONWARNINGS="default")
     ask_everything(server)
     _, log = server.stop()
     assert SECRET not in log

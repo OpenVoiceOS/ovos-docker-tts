@@ -261,11 +261,17 @@ def add_streaming(app: FastAPI, engine: Any) -> FastAPI:
 # and never deletes it. With OVOS_TTS_PRIVATE=1 (off by default, so the public images behave as
 # before):
 #
-# * no access log; the log level is forced to ERROR (OVOS_DEFAULT_LOG_LEVEL, which is what the OVOS
-#   logger reads; "log_level" in mycroft.conf is NOT read by this server) because phoonnx logs the
-#   text it says at DEBUG (phoonnx.voice) and the stdlib logger "text2spoken" logs unread written
-#   forms at WARNING; and an exception that reaches uvicorn is logged by its type only, because its
-#   message and traceback may quote the text (a 500 answers {"error": "internal"});
+# * no access log. **Nothing from the OVOS loggers or the libraries' loggers is written**, because
+#   they quote the text at every level: phoonnx logs what it says at DEBUG (phoonnx.voice) and the
+#   numbers it cannot read at ERROR ("failed to pronounce number: <word>", phoonnx.normalization),
+#   text2spoken logs unread written forms at WARNING, and an exception that was never retrieved is
+#   logged by asyncio with its message. The OVOS LOG has no CRITICAL method and no library calls
+#   `.critical`, so its level (OVOS_DEFAULT_LOG_LEVEL, which is what it reads: "log_level" in
+#   mycroft.conf is NOT read by this server) is forced to CRITICAL; the standard-library loggers of
+#   those libraries and the root logger are at CRITICAL too (the root's level is what a logger
+#   without a level of its own, such as asyncio's, inherits). What is left is uvicorn's own log,
+#   which has levels of its own, with a filter that writes an exception by its type only, because
+#   its message and traceback may quote the text; the request is answered 500 {"error": "internal"};
 # * each request gets a file of its own (the shared hash name is deleted at once), deleted as soon as
 #   its response has been sent or its synthesis failed; a sweeper in the pod's spec catches the answer
 #   of a request that went away;
@@ -288,14 +294,14 @@ def add_streaming(app: FastAPI, engine: Any) -> FastAPI:
 #   sent), waits for the syntheses running to end, and exits; the container's restart policy brings
 #   it back with its memory returned;
 # * the runtime's CPU memory arena is off (OVOS_TTS_NO_ARENA=0 turns it back on; the recycle exits
-#   through SIGTERM, status 143, which the kubelet counts as a failure, so with the arena on repeated
-#   recycles escalate the restart backoff: plan for it, or leave the arena off, where 600 fresh heavy lines
+#   through SIGTERM, which is a restart each time: leave the arena off, where 600 fresh heavy lines
 #   never reached the threshold): replaying the same 106
 #   heavy lines, 6 at a time, the resident memory stayed near 2 GB (high-water 3.0 GB) instead of
 #   growing to 7.8 GB, for 16 % more time a line (0.34 s against 0.30 s on 191 mixed lines).
-# Standard-library loggers that quote text. The OVOS loggers of phoonnx and the plugin manager are
-# not these: they are per-call-site loggers that follow LOG.level, set below.
-PRIVATE_LOGGERS = ("text2spoken", "scriptconv")
+# Standard-library loggers of the libraries that quote text. With the root logger at CRITICAL they
+# need no line of their own unless they have a level of their own: belt and braces. asyncio's
+# "Task exception was never retrieved" carries the exception's message.
+PRIVATE_LOGGERS = ("text2spoken", "scriptconv", "phoonnx", "ovos_plugin_manager", "asyncio")
 PRIVATE_ROUTES = frozenset({"/status", "/v2/synthesize"})
 
 
@@ -458,13 +464,17 @@ def _private_log_config() -> dict:
 
 
 def _quiet_ovos_logs() -> None:
-    """Force the OVOS loggers to ERROR, whatever the environment or mycroft.conf say."""
-    os.environ["OVOS_DEFAULT_LOG_LEVEL"] = "ERROR"  # read when ovos_utils is imported
+    """Write nothing from the OVOS loggers, whatever the environment or mycroft.conf say.
+
+    The OVOS LOG has debug, info, warning, error and exception, and each is gated on its level, so
+    CRITICAL (which no library calls) silences all of it, including the ERROR lines of phoonnx that
+    quote the number it could not read."""
+    os.environ["OVOS_DEFAULT_LOG_LEVEL"] = "CRITICAL"  # read when ovos_utils is imported
     try:
         from ovos_utils.log import LOG
     except ImportError:  # not installed: nothing of it logs
         return
-    LOG.set_level("ERROR")  # and for what has been imported already
+    LOG.set_level("CRITICAL")  # and for what has been imported already
 
 
 def _make_private(app: FastAPI, recycling: "_Recycling | None" = None) -> None:
@@ -518,8 +528,11 @@ def main() -> None:
 
         import uvicorn
 
+        # A logger without a level of its own (asyncio's, and any library's) follows the root's.
+        # uvicorn's loggers have levels of their own, so the exception line below still comes out.
+        logging.getLogger().setLevel(logging.CRITICAL)
         for name in PRIVATE_LOGGERS:
-            logging.getLogger(name).setLevel(logging.ERROR)
+            logging.getLogger(name).setLevel(logging.CRITICAL)
         uvicorn.run = functools.partial(uvicorn.run, access_log=False, log_config=_private_log_config())
         if os.environ.get("OVOS_TTS_NO_ARENA", "1").strip().lower() in ("1", "true", "yes", "on"):
             import onnxruntime
