@@ -24,6 +24,26 @@ docker build -f phoonnx/Dockerfile.cuda -t smartgic/ovos-tts-server-phoonnx-cuda
 
 Their entrypoint is `ovos-tts-server-stream`. It is `ovos-tts-server` with one more route, `GET /v2/synthesize/stream`, which sends the audio while the engine makes it.
 
+### Private mode
+
+Set `OVOS_TTS_PRIVATE=1` on a `phoonnx` image when the server is given text that its author owns (Skill Studio's "Hear it" is the first user). It is off by default, so the public images behave as before. With it on:
+
+- The server writes no access log (the access log holds the request line, and the text is in it). The loggers that quote text are raised to `ERROR`.
+- Each request has its own answer file, deleted as soon as the answer is sent or the synthesis fails. A sweeper in the pod must remove the file of a request that went away.
+- Only `GET /status` and `GET /v2/synthesize` are served. The other routes and the CORS headers are removed. `/v2/synthesize/stream` is removed too: it reads plain text, not SSML.
+- `GET /status` has `"private": true`. Clients show a promise of privacy only when they read it.
+- `OVOS_TTS_CONCURRENCY=N` is the number of syntheses that can run at once (4 when unset). The next request gets `503` with `Retry-After`. `/status` never counts. Run one worker.
+- The process recycles itself when its resident memory passes `OVOS_TTS_RECYCLE_MB` (4096 when unset, 0 turns it off). It stops taking syntheses (`503`, and `/status` answers `503 {"recycling": true}`), waits for the running ones, and exits. The container must restart it.
+- The CPU memory arena of ONNX Runtime is off (`OVOS_TTS_NO_ARENA=0` turns it on again). With the arena on, the resident memory grows with the heaviest lines and is never returned.
+
+The image entrypoint ends with `--cache`, which stores every answer on disk. For a private server, override `command` and `args` and do not pass `--cache`:
+
+```sh
+ovos-tts-server-stream --engine ovos-tts-plugin-phoonnx --host 0.0.0.0 --port 9666
+```
+
+Size the memory limit as `1.15 x (OVOS_TTS_RECYCLE_MB + N x 0.53 GiB)`: 6.5Gi for N = 3 and 8.5Gi for N = 6 at the default threshold.
+
 Images publish to the Docker Hub `smartgic/` namespace. The image labels still point back to this repository as the source.
 
 ## Usage

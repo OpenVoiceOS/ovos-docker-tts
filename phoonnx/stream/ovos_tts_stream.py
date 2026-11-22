@@ -26,8 +26,10 @@ import hashlib
 import logging
 import os
 import queue
+import shutil
 import struct
 import sys
+import tempfile
 import threading
 import wave
 from collections.abc import Iterator
@@ -250,17 +252,238 @@ def add_streaming(app: FastAPI, engine: Any) -> FastAPI:
     return app
 
 
+# -- the words are the author's ---------------------------------------------------------------
+#
+# Skill Studio's "Hear it" sends a skill author's words to this server. By default the stock
+# server keeps and logs them: uvicorn's access log holds the whole request line (the utterance is
+# in its query), phoonnx's text frontend logs the written forms it cannot read at WARNING, and the
+# plugin writes every answer to a WAV under the temporary directory, named by a hash of the words,
+# and never deletes it. With OVOS_TTS_PRIVATE=1 (off by default, so the public images behave as
+# before):
+#
+# * no access log, and the loggers that quote text are raised to ERROR;
+# * each request gets a file of its own (the shared hash name is deleted at once), deleted as soon as
+#   its response has been sent or its synthesis failed; a sweeper in the pod's spec catches the answer
+#   of a request that went away;
+# * only /status and /v2/synthesize answer: the other routes (the JSON one reads a file and never
+#   deletes it, the legacy one takes the words in the path, the documentation lists the rest) and the
+#   CORS headers are gone;
+# * GET /status says "private": true, which is what the API tells authors it may promise;
+# * OVOS_TTS_CONCURRENCY=N (4 when unset, so that unset never means no limit) runs at most N syntheses
+#   at once and answers 503 to the next: the server's worst case is N lines, whatever is asked and
+#   however many clients gave up (it counts the threads still synthesising, not the connections).
+#   Set it to the API's synthesis slots in all (3 per API replica). /status is not a synthesis and
+#   never counts, so probes and the API's question still answer while the server is full. The server
+#   runs one worker, one process;
+# * the process recycles itself: the runtime keeps what the heaviest and most varied lines took (its
+#   memory arenas grow to the largest shape each voice has seen and are never returned: replaying 106
+#   heavy lines, 6 at a time, took the resident memory from 5.3 to 9.2 GB with no plateau, and a
+#   handful of such lines from one address inside its limits would do it), so once the resident memory
+#   passes OVOS_TTS_RECYCLE_MB (4096 when unset) the server stops taking syntheses (503 with
+#   Retry-After, and /status answers 503 {"recycling": true}, so readiness fails and no traffic is
+#   sent), waits for the syntheses running to end, and exits; the container's restart policy brings
+#   it back with its memory returned;
+# * the runtime's CPU memory arena is off (OVOS_TTS_NO_ARENA=0 turns it back on; the recycle exits
+#   through SIGTERM, status 143, which the kubelet counts as a failure, so with the arena on repeated
+#   recycles escalate the restart backoff: plan for it, or leave the arena off, where 600 fresh heavy lines
+#   never reached the threshold): replaying the same 106
+#   heavy lines, 6 at a time, the resident memory stayed near 2 GB (high-water 3.0 GB) instead of
+#   growing to 7.8 GB, for 16 % more time a line (0.34 s against 0.30 s on 191 mixed lines).
+PRIVATE_LOGGERS = ("text2spoken", "phoonnx", "scriptconv", "ovos_plugin_manager")
+PRIVATE_ROUTES = frozenset({"/status", "/v2/synthesize"})
+
+
+def _private() -> bool:
+    return os.environ.get("OVOS_TTS_PRIVATE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _forget(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _concurrency() -> int:
+    try:
+        return max(1, int(os.environ.get("OVOS_TTS_CONCURRENCY", "").strip() or DEFAULT_CONCURRENCY))
+    except ValueError:
+        return DEFAULT_CONCURRENCY
+
+
+DEFAULT_CONCURRENCY = 4
+DEFAULT_RECYCLE_MB = 4096
+
+
+def _recycle_mb() -> int:
+    try:
+        return int(os.environ.get("OVOS_TTS_RECYCLE_MB", "").strip() or DEFAULT_RECYCLE_MB)
+    except ValueError:
+        return DEFAULT_RECYCLE_MB
+
+
+def _rss_mb() -> int:
+    with open("/proc/self/statm") as statm:
+        return int(statm.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") // (1024 * 1024)
+
+
+class _Recycling:
+    """Drain, then exit, once the resident memory is over the threshold."""
+
+    def __init__(self, threshold_mb: int) -> None:
+        self.threshold_mb = threshold_mb
+        self.draining = threading.Event()
+        self.running = 0
+        self.lock = threading.Lock()
+        self._exiting = False
+
+    def enter(self) -> None:
+        from fastapi import HTTPException
+
+        with self.lock:
+            if self.draining.is_set():
+                raise HTTPException(status_code=503, detail="recycling", headers={"Retry-After": "5"})
+            self.running += 1
+
+    def leave(self) -> None:
+        with self.lock:
+            self.running -= 1
+            if not self.draining.is_set() and self.threshold_mb > 0 and _rss_mb() > self.threshold_mb:
+                self.draining.set()
+            if self.draining.is_set() and self.running == 0 and not self._exiting:
+                self._exiting = True
+                # The last synthesis has ended: uvicorn finishes the responses it is sending, then the
+                # container restarts with its memory returned.
+                import signal
+
+                os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _keep_no_words(engine: Any, recycling: "_Recycling | None" = None) -> None:
+    """Give each request a file of its own, so that deleting it cannot take another's away; run
+    at most OVOS_TTS_CONCURRENCY syntheses at once; and recycle when the memory has grown."""
+    synthesize = engine.synthesize
+    slots = threading.BoundedSemaphore(_concurrency())
+
+    def synthesize_for_this_request(*args: Any, **kwargs: Any) -> Any:
+        from fastapi import HTTPException
+
+        if recycling is not None:
+            recycling.enter()
+        try:
+            if not slots.acquire(blocking=False):
+                raise HTTPException(status_code=503, detail="busy", headers={"Retry-After": "2"})
+            try:
+                return _synthesize_with_own_file(synthesize, *args, **kwargs)
+            finally:
+                slots.release()
+        finally:
+            if recycling is not None:
+                recycling.leave()
+
+    engine.synthesize = synthesize_for_this_request
+
+
+def _synthesize_with_own_file(synthesize: Any, *args: Any, **kwargs: Any) -> Any:
+    for attempt in (0, 1):
+        result = synthesize(*args, **kwargs)
+        path = os.fspath(result[0] if isinstance(result, tuple) else result)
+        own = None
+        try:
+            handle, own = tempfile.mkstemp(suffix=".wav", dir=os.path.dirname(path))
+            os.close(handle)
+            shutil.copyfile(path, own)
+        except FileNotFoundError:
+            # A request for the same words had already taken the cached name away.
+            if own:
+                _forget(own)
+            if attempt:
+                raise
+            continue
+        except BaseException:
+            # Whatever failed, neither the copy nor the shared name is left behind.
+            if own:
+                _forget(own)
+            _forget(path)
+            raise
+        _forget(path)
+        return (own, *result[1:]) if isinstance(result, tuple) else own
+
+
+def _forgetful_file_response() -> Any:
+    """FileResponse that deletes its file once the response has been sent, or could not be."""
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+
+    class ForgetfulFileResponse(FileResponse):
+        def __init__(self, path: Any, *args: Any, **kwargs: Any) -> None:
+            try:
+                super().__init__(path, *args, background=BackgroundTask(_forget, os.fspath(path)),
+                                 **kwargs)
+            except BaseException:
+                _forget(os.fspath(path))
+                raise
+
+    return ForgetfulFileResponse
+
+
+def _make_private(app: FastAPI, recycling: "_Recycling | None" = None) -> None:
+    """Only the routes the API uses, no CORS, and /status says it is private."""
+    import json
+
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+
+    app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", None) in PRIVATE_ROUTES]
+    app.user_middleware = [m for m in app.user_middleware if m.cls is not CORSMiddleware]
+
+    @app.middleware("http")
+    async def say_private(request: Any, call_next: Any) -> Any:
+        response = await call_next(request)
+        if request.url.path == "/status" and response.status_code == 200:
+            body = b"".join([chunk async for chunk in response.body_iterator])
+            if recycling is not None and recycling.draining.is_set():
+                # Not ready: the memory is being returned. Readiness fails, no traffic is sent.
+                return JSONResponse({**json.loads(body), "private": True, "recycling": True}, status_code=503)
+            return JSONResponse({**json.loads(body), "private": True})
+        return response
+
+
 def main() -> None:
     """`ovos-tts-server` with the streaming route."""
     import ovos_tts_server
     from ovos_tts_server.__main__ import main as serve
 
     create_app = ovos_tts_server.create_app
+    private = _private()
 
     def create_streaming_app(tts_engine: Any, *args: Any, **kwargs: Any) -> FastAPI:
-        # Whatever else the server passes (newer versions add enable_mcp) is its own business.
-        return add_streaming(create_app(tts_engine, *args, **kwargs), tts_engine)
+        app = add_streaming(create_app(tts_engine, *args, **kwargs), tts_engine)
+        if private:
+            recycling = _Recycling(_recycle_mb())
+            _keep_no_words(tts_engine, recycling)
+            _make_private(app, recycling)
+        return app
 
+    if private:
+        import functools
+
+        import uvicorn
+
+        for name in PRIVATE_LOGGERS:
+            logging.getLogger(name).setLevel(logging.ERROR)
+        uvicorn.run = functools.partial(uvicorn.run, access_log=False)
+        if os.environ.get("OVOS_TTS_NO_ARENA", "1").strip().lower() in ("1", "true", "yes", "on"):
+            import onnxruntime
+
+            class NoArenaSessionOptions(onnxruntime.SessionOptions):
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.enable_cpu_mem_arena = False
+                    self.enable_mem_pattern = False
+
+            onnxruntime.SessionOptions = NoArenaSessionOptions
+        ovos_tts_server.FileResponse = _forgetful_file_response()
     ovos_tts_server.create_app = create_streaming_app
     serve()
 
