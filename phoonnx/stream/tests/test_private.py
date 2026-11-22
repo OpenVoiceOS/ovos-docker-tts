@@ -21,6 +21,17 @@ import ovos_tts_stream as s  # noqa: E402
 PRIVATE_ENV = ("OVOS_TTS_PRIVATE", "OVOS_TTS_CONCURRENCY", "OVOS_TTS_RECYCLE_MB", "OVOS_TTS_NO_ARENA")
 
 
+@pytest.fixture(autouse=True)
+def keep_the_log_level(monkeypatch):
+    """main() forces the OVOS log level to ERROR, in the environment and in LOG: undo it."""
+    from ovos_utils.log import LOG
+
+    monkeypatch.setenv("OVOS_DEFAULT_LOG_LEVEL", "INFO")
+    level = LOG.level
+    yield
+    LOG.set_level(level)
+
+
 class Plugin:
     config = {"voice": "piper/test"}
 
@@ -161,14 +172,18 @@ def test_a_failed_synthesis_leaves_nothing(monkeypatch, tmp_path):
     assert len(wavs(tmp_path)) == 1
 
 
-def test_the_words_are_not_logged(monkeypatch, tmp_path, caplog):
+def test_the_log_is_configured_for_privacy(monkeypatch, tmp_path):
+    """What the real log output holds is tested in test_private_process.py; this is the wiring."""
     import uvicorn
+
+    from ovos_utils.log import LOG
 
     given = {}
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: given.update(k))
     for name in PRIVATE_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OVOS_TTS_PRIVATE", "1")
+    monkeypatch.setenv("OVOS_DEFAULT_LOG_LEVEL", "DEBUG")  # asked for, and not obeyed
     entry = type(sys)("ovos_tts_server.__main__")
     entry.main = lambda: uvicorn.run(object(), host="0.0.0.0", port=1)  # as the server's main() does
     monkeypatch.setitem(sys.modules, "ovos_tts_server.__main__", entry)
@@ -182,9 +197,43 @@ def test_the_words_are_not_logged(monkeypatch, tmp_path, caplog):
         assert given["host"] == "0.0.0.0" and given["port"] == 1  # the server's own arguments stand
         for name in s.PRIVATE_LOGGERS:
             assert logging.getLogger(name).level == logging.ERROR
+        assert os.environ["OVOS_DEFAULT_LOG_LEVEL"] == "ERROR"
+        assert LOG.level == "ERROR"
+        # Every handler of uvicorn's log keeps an exception's type and drops its message.
+        config = given["log_config"]
+        assert config["filters"]["no_words"]["()"] == "ovos_tts_stream.NoWords"
+        assert all("no_words" in h["filters"] for h in config["handlers"].values())
     finally:
         for name, level in levels.items():
             logging.getLogger(name).setLevel(level)
+
+
+def test_no_words_keeps_the_type_and_drops_the_message_and_the_traceback():
+    try:
+        raise ValueError("cannot say SECRETWORDQQ")
+    except ValueError:
+        record = logging.LogRecord("uvicorn.error", logging.ERROR, __file__, 1,
+                                   "Exception in ASGI application\n", None, sys.exc_info())
+    assert s.NoWords().filter(record)
+    assert record.exc_info is None and record.exc_text is None
+    assert "SECRETWORDQQ" not in record.getMessage() and "ValueError" in record.getMessage()
+    plain = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1, "Uvicorn running on %s", ("x",), None)
+    s.NoWords().filter(plain)
+    assert plain.getMessage() == "Uvicorn running on x"  # what carries no exception is untouched
+
+
+def test_an_engine_that_raises_is_a_500_that_says_nothing(monkeypatch, tmp_path):
+    wrapper = Wrapper(tmp_path)
+
+    def broken(utterance, **params):
+        raise ValueError(f"cannot say {utterance}")
+
+    wrapper.synthesize = broken
+    client = serve_app(monkeypatch, wrapper, OVOS_TTS_PRIVATE="1")
+    client = TestClient(client.app, raise_server_exceptions=False)
+    answer = client.get("/v2/synthesize", params={"utterance": "SECRETWORDQQ"})
+    assert answer.status_code == 500
+    assert answer.json() == {"error": "internal"} and "SECRET" not in answer.text
 
 
 def test_the_arena_is_off_in_private_mode_and_on_when_asked(monkeypatch, tmp_path):

@@ -28,12 +28,14 @@ Their entrypoint is `ovos-tts-server-stream`. It is `ovos-tts-server` with one m
 
 Set `OVOS_TTS_PRIVATE=1` on a `phoonnx` image when the server is given text that its author owns (Skill Studio's "Hear it" is the first user). It is off by default, so the public images behave as before. With it on:
 
-- The server writes no access log (the access log holds the request line, and the text is in it). The loggers that quote text are raised to `ERROR`.
+- The server writes no access log (the access log holds the request line, and the text is in it).
+- The log level is forced to `ERROR`. What controls it is the environment variable `OVOS_DEFAULT_LOG_LEVEL` (default `INFO`), which the OVOS loggers read; **`log_level` in `mycroft.conf` is not read by this server**. Raising the level logs the text: phoonnx logs what it says at `DEBUG` (`phoonnx.voice`). Private mode sets the variable to `ERROR` itself and ignores a higher setting. The standard-library loggers `text2spoken` and `scriptconv` are raised to `ERROR` too (`text2spoken` logs unread written forms at `WARNING`).
+- An exception in a request is answered `500 {"error": "internal"}` and logged by its type only: its message and traceback can quote the text.
 - Each request has its own answer file, deleted as soon as the answer is sent or the synthesis fails. A sweeper in the pod must remove the file of a request that went away.
 - Only `GET /status` and `GET /v2/synthesize` are served. The other routes and the CORS headers are removed. `/v2/synthesize/stream` is removed too: it reads plain text, not SSML.
 - `GET /status` has `"private": true`. Clients show a promise of privacy only when they read it.
 - `OVOS_TTS_CONCURRENCY=N` is the number of syntheses that can run at once (4 when unset). The next request gets `503` with `Retry-After`. `/status` never counts. Run one worker.
-- The process recycles itself when its resident memory passes `OVOS_TTS_RECYCLE_MB` (4096 when unset, 0 turns it off). It stops taking syntheses (`503`, and `/status` answers `503 {"recycling": true}`), waits for the running ones, and exits. The container must restart it.
+- The process recycles itself when its resident memory passes `OVOS_TTS_RECYCLE_MB` (4096 when unset, 0 turns it off). It stops taking syntheses (`503`, and `/status` answers `503 {"recycling": true}`), waits for the running ones, and exits. The container must restart it. The exit status is **0 in a container** (the process is PID 1, and the kernel gives PID 1 no signal that has the default action, so uvicorn's last SIGTERM does nothing) and **143 (SIGTERM) anywhere else**, for example under `docker run --init` or `shareProcessNamespace`. Both are a restart with `restartPolicy: Always`. During a recycle (a few seconds to load the voices again) the server answers `503`; with one replica and the `Recreate` strategy that is a short outage, which clients must treat as "use another voice".
 - The CPU memory arena of ONNX Runtime is off (`OVOS_TTS_NO_ARENA=0` turns it on again). With the arena on, the resident memory grows with the heaviest lines and is never returned.
 
 The image entrypoint ends with `--cache`, which stores every answer on disk. For a private server, override `command` and `args` and do not pass `--cache`:

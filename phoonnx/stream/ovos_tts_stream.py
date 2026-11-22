@@ -261,7 +261,11 @@ def add_streaming(app: FastAPI, engine: Any) -> FastAPI:
 # and never deletes it. With OVOS_TTS_PRIVATE=1 (off by default, so the public images behave as
 # before):
 #
-# * no access log, and the loggers that quote text are raised to ERROR;
+# * no access log; the log level is forced to ERROR (OVOS_DEFAULT_LOG_LEVEL, which is what the OVOS
+#   logger reads; "log_level" in mycroft.conf is NOT read by this server) because phoonnx logs the
+#   text it says at DEBUG (phoonnx.voice) and the stdlib logger "text2spoken" logs unread written
+#   forms at WARNING; and an exception that reaches uvicorn is logged by its type only, because its
+#   message and traceback may quote the text (a 500 answers {"error": "internal"});
 # * each request gets a file of its own (the shared hash name is deleted at once), deleted as soon as
 #   its response has been sent or its synthesis failed; a sweeper in the pod's spec catches the answer
 #   of a request that went away;
@@ -289,7 +293,9 @@ def add_streaming(app: FastAPI, engine: Any) -> FastAPI:
 #   never reached the threshold): replaying the same 106
 #   heavy lines, 6 at a time, the resident memory stayed near 2 GB (high-water 3.0 GB) instead of
 #   growing to 7.8 GB, for 16 % more time a line (0.34 s against 0.30 s on 191 mixed lines).
-PRIVATE_LOGGERS = ("text2spoken", "phoonnx", "scriptconv", "ovos_plugin_manager")
+# Standard-library loggers that quote text. The OVOS loggers of phoonnx and the plugin manager are
+# not these: they are per-call-site loggers that follow LOG.level, set below.
+PRIVATE_LOGGERS = ("text2spoken", "scriptconv")
 PRIVATE_ROUTES = frozenset({"/status", "/v2/synthesize"})
 
 
@@ -427,6 +433,40 @@ def _forgetful_file_response() -> Any:
     return ForgetfulFileResponse
 
 
+class NoWords(logging.Filter):
+    """Log an exception by its type only: its message and traceback may quote the text."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info:
+            kind = getattr(record.exc_info[0], "__name__", "exception")
+            record.msg, record.args = f"unhandled {kind} in a request (details withheld)", None
+            record.exc_info = record.exc_text = None
+        return True
+
+
+def _private_log_config() -> dict:
+    """uvicorn's own log configuration, with the filter above on every handler."""
+    import copy
+
+    from uvicorn.config import LOGGING_CONFIG
+
+    config = copy.deepcopy(LOGGING_CONFIG)
+    config.setdefault("filters", {})["no_words"] = {"()": "ovos_tts_stream.NoWords"}
+    for handler in config.get("handlers", {}).values():
+        handler["filters"] = [*handler.get("filters", []), "no_words"]
+    return config
+
+
+def _quiet_ovos_logs() -> None:
+    """Force the OVOS loggers to ERROR, whatever the environment or mycroft.conf say."""
+    os.environ["OVOS_DEFAULT_LOG_LEVEL"] = "ERROR"  # read when ovos_utils is imported
+    try:
+        from ovos_utils.log import LOG
+    except ImportError:  # not installed: nothing of it logs
+        return
+    LOG.set_level("ERROR")  # and for what has been imported already
+
+
 def _make_private(app: FastAPI, recycling: "_Recycling | None" = None) -> None:
     """Only the routes the API uses, no CORS, and /status says it is private."""
     import json
@@ -436,6 +476,12 @@ def _make_private(app: FastAPI, recycling: "_Recycling | None" = None) -> None:
 
     app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", None) in PRIVATE_ROUTES]
     app.user_middleware = [m for m in app.user_middleware if m.cls is not CORSMiddleware]
+
+    @app.exception_handler(Exception)
+    async def say_nothing_of_it(request: Any, error: Exception) -> Any:
+        # Starlette sends this, then raises the error again for the server to log: uvicorn's
+        # handlers hold NoWords, which keeps the type and drops the message and the traceback.
+        return JSONResponse({"error": "internal"}, status_code=500)
 
     @app.middleware("http")
     async def say_private(request: Any, call_next: Any) -> Any:
@@ -451,11 +497,13 @@ def _make_private(app: FastAPI, recycling: "_Recycling | None" = None) -> None:
 
 def main() -> None:
     """`ovos-tts-server` with the streaming route."""
+    private = _private()
+    if private:
+        _quiet_ovos_logs()  # before ovos_utils is imported by the server
     import ovos_tts_server
     from ovos_tts_server.__main__ import main as serve
 
     create_app = ovos_tts_server.create_app
-    private = _private()
 
     def create_streaming_app(tts_engine: Any, *args: Any, **kwargs: Any) -> FastAPI:
         app = add_streaming(create_app(tts_engine, *args, **kwargs), tts_engine)
@@ -472,7 +520,7 @@ def main() -> None:
 
         for name in PRIVATE_LOGGERS:
             logging.getLogger(name).setLevel(logging.ERROR)
-        uvicorn.run = functools.partial(uvicorn.run, access_log=False)
+        uvicorn.run = functools.partial(uvicorn.run, access_log=False, log_config=_private_log_config())
         if os.environ.get("OVOS_TTS_NO_ARENA", "1").strip().lower() in ("1", "true", "yes", "on"):
             import onnxruntime
 
