@@ -1,4 +1,6 @@
-FROM python:3.15-slim
+# Python 3.12: misaki (the Kokoro phonemizer) requires Python below 3.14.
+# renovate.json keeps the base image below 3.13 for that reason.
+FROM python:3.12-slim
 
 ARG BUILD_DATE=unknown
 ARG VERSION=unknown
