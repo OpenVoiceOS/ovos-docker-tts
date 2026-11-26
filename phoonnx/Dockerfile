@@ -57,16 +57,23 @@ USER $USER
 # call fails the build if English does not load without the removed packages.
 # tokenizers<1: --pre takes the 1.0 release candidates, which have no Tokenizer.encode; the
 # Hebrew vowel marks call it, and the voice reads the bare letters when it fails.
+# The packages some engines load on demand, which "phoonnx[espeak]" does not bring:
+# safetensors (Pocket TTS voice states, the "pockettts" extra), sentencepiece (MOSS-TTS-Nano)
+# and scipy (Spark-TTS, the speaker encoders, the loudness target, and the polyphase
+# resampling of audio_fx: without scipy, an SSML pitch shift resamples linearly).
+# safetensors<0.9: --pre takes its 0.9 release candidates; 0.8.0 is the last stable release.
 RUN pip3 install --no-cache-dir --no-deps --index-url https://download.pytorch.org/whl/cpu torch \
     && pip3 install --no-cache-dir --pre "gradio-client<1.0" "setuptools<81" "tokenizers<1" \
         ovos-tts-server \
-        "phoonnx[espeak] @ git+https://github.com/TigreGotico/phoonnx.git@${PHOONNX_REF}" \
+        "phoonnx[espeak,pockettts] @ git+https://github.com/TigreGotico/phoonnx.git@${PHOONNX_REF}" \
+        "safetensors<0.9" sentencepiece scipy \
         "scriptconv[espeak,he,misaki,pt,tashkeel]>=0.0.4a123" \
     && pip3 uninstall -y \
         spacy-curated-transformers curated-transformers curated-tokenizers \
         torch sympy mpmath networkx \
     && python -m spacy download en_core_web_sm \
     && python -c "from misaki import en; en.G2P()('The image can speak English.')" \
+    && python -c "import safetensors, sentencepiece, scipy.signal" \
     && mkdir -p /home/${USER}/.cache/phoonnx /home/${USER}/gradio_cached_examples \
     && rm -rf /home/${USER}/.cache/pip
 
