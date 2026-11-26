@@ -110,19 +110,26 @@ USER ${USER}
 # take the CUDA wheel with its own CUDA libraries, and both are removed again. The spaCy model
 # is installed here because misaki would otherwise fetch it with pip on the first request. The
 # G2P call fails the build if English does not load without the removed packages.
+# The packages some engines load on demand, which "phoonnx[espeak]" does not bring:
+# safetensors (Pocket TTS voice states, the "pockettts" extra), sentencepiece (MOSS-TTS-Nano)
+# and scipy (Spark-TTS, the speaker encoders, the loudness target, and the polyphase
+# resampling of audio_fx: without scipy, an SSML pitch shift resamples linearly).
+# safetensors<0.9: --pre takes its 0.9 release candidates; 0.8.0 is the last stable release.
 RUN python -m pip install --no-cache-dir --upgrade pip wheel \
     && python -m pip install --no-cache-dir --no-deps \
         --index-url https://download.pytorch.org/whl/cpu torch \
     && python -m pip install --no-cache-dir --pre \
         "gradio-client<1.0" "setuptools<81" "tokenizers<1" \
         ovos-tts-server \
-        "phoonnx[espeak] @ git+${PHOONNX_REPOSITORY}@${PHOONNX_REF}" \
+        "phoonnx[espeak,pockettts] @ git+${PHOONNX_REPOSITORY}@${PHOONNX_REF}" \
+        "safetensors<0.9" sentencepiece scipy \
         "scriptconv[espeak,he,misaki,pt,tashkeel]>=0.0.4a123" \
     && python -m pip uninstall -y \
         spacy-curated-transformers curated-transformers curated-tokenizers \
         torch sympy mpmath networkx \
     && python -m spacy download en_core_web_sm \
     && python -c "from misaki import en; en.G2P()('The image can speak English.')" \
+    && python -c "import safetensors, sentencepiece, scipy.signal" \
     && python -m pip uninstall -y onnxruntime \
     && python -m pip install --no-cache-dir --no-deps \
         "onnxruntime-gpu==${ONNXRUNTIME_GPU_REF}" \
