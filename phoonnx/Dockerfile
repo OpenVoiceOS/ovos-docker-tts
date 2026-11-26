@@ -1,4 +1,7 @@
-FROM python:3.15-slim
+# Python 3.12: onnxruntime has no wheel for 3.15 ("No matching distribution found"), and the
+# Kokoro (misaki) and Hebrew (phonikud) phonemizers do not install on 3.13 or later.
+# renovate.json keeps the base image below 3.13 for that reason.
+FROM python:3.12-slim
 
 ARG BUILD_DATE=unknown
 ARG VERSION=unknown

@@ -2,5 +2,21 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "Python 3.13 and later break these images: onnxruntime has no wheel for 3.15, misaki (Kokoro) requires Python below 3.14, and phonikud (Hebrew) does not install on 3.13 or later.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "matchFileNames": [
+        "phoonnx/Dockerfile",
+        "kokoro/Dockerfile"
+      ],
+      "allowedVersions": "<3.13"
+    }
   ]
 }
